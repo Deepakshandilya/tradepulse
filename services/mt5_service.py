@@ -141,7 +141,9 @@ class MT5Service:
         self.ensure_connected()
 
         from_date = datetime.now(timezone.utc) - timedelta(days=days_back)
-        to_date   = datetime.now(timezone.utc)
+        # MT5 expects broker time. Since we are using UTC, we add 1 day to to_date
+        # to ensure we don't accidentally cut off recent deals if the broker is ahead of UTC.
+        to_date   = datetime.now(timezone.utc) + timedelta(days=1)
 
         deals = mt5.history_deals_get(from_date, to_date)
         if deals is None:

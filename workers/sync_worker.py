@@ -64,27 +64,60 @@ def sync_all_accounts(app, socketio) -> None:
                 new_trades = []
 
                 # ── Closed deals ───────────────────────────────────────────
+                # Deals come in two legs (ENTRY_IN and ENTRY_OUT) linked by position_id.
+                # We use position_id as our unique ticket key and merge both legs
+                # into a single row so close_price and close_time are populated.
                 for deal in deals:
-                    # Skip balance deposits, credits, charges — only process BUY/SELL
                     if deal.type not in REAL_TRADE_TYPES:
                         filtered += 1
                         continue
 
-                    # Extra safety guard: skip zero-volume or symbolless deals
                     if not deal.symbol or deal.volume == 0:
                         filtered += 1
                         continue
 
-                    if Trade.query.filter_by(ticket=deal.ticket).first():
+                    pos_id = deal.position_id
+
+                    if deal.entry == 1:   # DEAL_ENTRY_OUT — update existing row
+                        existing = Trade.query.filter_by(ticket=pos_id).first()
+                        if existing:
+                            existing.close_price = deal.price
+                            existing.close_time  = mt5.ts_to_datetime(deal.time)
+                            existing.profit      = deal.profit
+                            db.session.flush()
+                            skipped += 1
+                        else:
+                            # Edge case: orphan exit deal — store standalone
+                            trade_type = "BUY" if deal.type == 0 else "SELL"
+                            from models.trade import Trade as TradeModel
+                            trade = TradeModel(
+                                account_id  = account.id,
+                                ticket      = deal.ticket,
+                                symbol      = deal.symbol,
+                                trade_type  = trade_type,
+                                volume      = deal.volume,
+                                open_price  = None,
+                                close_price = deal.price,
+                                profit      = deal.profit,
+                                open_time   = None,
+                                close_time  = mt5.ts_to_datetime(deal.time),
+                            )
+                            db.session.add(trade)
+                            db.session.flush()
+                            new_trades.append(trade)
+                            inserted += 1
+                        continue
+
+                    # DEAL_ENTRY_IN — insert new row keyed by position_id
+                    if Trade.query.filter_by(ticket=pos_id).first():
                         skipped += 1
                         continue
 
                     trade_type = "BUY" if deal.type == 0 else "SELL"
-
                     from models.trade import Trade as TradeModel
                     trade = TradeModel(
                         account_id  = account.id,
-                        ticket      = deal.ticket,
+                        ticket      = pos_id,
                         symbol      = deal.symbol,
                         trade_type  = trade_type,
                         volume      = deal.volume,
