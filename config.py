@@ -19,7 +19,8 @@ class Config:
     SQLALCHEMY_ECHO: bool = False  # Set True to log SQL queries
 
     # ── MetaTrader 5 ───────────────────────────────────────────────────────
-    MT5_LOGIN: int = int(os.getenv("MT5_LOGIN", "0"))
+    _login_str = os.getenv("MT5_LOGIN", "")
+    MT5_LOGIN: int = int(_login_str) if _login_str.isdigit() else ""
     MT5_PASSWORD: str = os.getenv("MT5_PASSWORD", "")
     MT5_SERVER: str = os.getenv("MT5_SERVER", "")
 

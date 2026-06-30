@@ -12,8 +12,8 @@ from flasgger import Swagger
 db = SQLAlchemy()
 socketio = SocketIO()
 
-# ── OpenAPI / Swagger configuration ───────────────────────────────────────
 SWAGGER_CONFIG = {
+    "openapi": "3.0.0",
     "headers": [],
     "specs": [
         {
@@ -29,6 +29,7 @@ SWAGGER_CONFIG = {
 }
 
 SWAGGER_TEMPLATE = {
+    "openapi": "3.0.0",
     "info": {
         "title": "TradePulse API",
         "description": (
@@ -40,9 +41,9 @@ SWAGGER_TEMPLATE = {
             "name": "TradePulse Support",
         },
     },
-    "host": "localhost:5000",
-    "basePath": "/",
-    "schemes": ["http"],
+    "servers": [
+        {"url": "/", "description": "Local server"}
+    ],
     "components": {
         "schemas": {
             "User": {

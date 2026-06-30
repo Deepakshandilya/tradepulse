@@ -40,9 +40,12 @@ def sync_all_accounts(app, socketio) -> None:
         from services.commission_engine import calculate_and_save
         from app import db
 
-        accounts = BrokerAccount.query.all()
+        from config import Config
+        env_account = str(Config.MT5_LOGIN)
+        
+        accounts = BrokerAccount.query.filter_by(account_no=env_account).all()
         if not accounts:
-            log.debug("No broker accounts found — nothing to sync.")
+            log.debug("No broker account matches the .env MT5_LOGIN (%s) — nothing to sync.", env_account)
             return
 
         mt5 = MT5Service()
