@@ -36,18 +36,19 @@ def _broadcast_loop(socketio: "SocketIO") -> None:
     from services.mt5_service import MT5Service
     mt5 = MT5Service()
 
-    # Connect once — keep the session alive across the loop
+    # Connect once — shared global connection for the entire process lifetime
     try:
         mt5.connect()
         log.info("MT5 connected for market data broadcast.")
     except Exception as exc:
-        log.warning("MT5 connect failed in broadcast loop: %s — ticks will be skipped.", exc)
+        log.warning("MT5 initial connect failed in broadcast loop: %s — will retry each tick.", exc)
 
     log.info("Market data broadcast loop started.")
 
     while True:
         for symbol in list(subscribed_symbols):
             try:
+                # ensure_connected() auto-reconnects if MT5 dropped silently
                 tick = mt5.get_tick(symbol)
                 if tick:
                     socketio.emit("market_data", tick)

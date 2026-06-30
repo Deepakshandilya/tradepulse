@@ -164,9 +164,6 @@ def sync_trades(account_id: int):
         db.session.rollback()
         return jsonify({"error": str(e)}), 500
 
-    finally:
-        mt5.disconnect()
-
 
 # ── GET /api/trades/<account_id> ───────────────────────────────────────────
 @trades_bp.route("/trades/<int:account_id>", methods=["GET"])

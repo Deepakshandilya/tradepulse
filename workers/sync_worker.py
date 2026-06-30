@@ -47,7 +47,7 @@ def sync_all_accounts(app, socketio) -> None:
 
         mt5 = MT5Service()
         try:
-            mt5.connect()
+            mt5.ensure_connected()
         except ConnectionError as exc:
             log.error("MT5 connect failed in background sync: %s", exc)
             return
@@ -142,9 +142,6 @@ def sync_all_accounts(app, socketio) -> None:
         except Exception as exc:
             db.session.rollback()
             log.error("Sync error: %s", exc)
-
-        finally:
-            mt5.disconnect()
 
 
 # ── Scheduler setup ────────────────────────────────────────────────────────
