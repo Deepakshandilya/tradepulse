@@ -1,215 +1,127 @@
 # TradePulse 📈
 
-A real-time **Trading CRM backend** built with Python, Flask, and MetaTrader 5.  
-Syncs trade history, calculates commissions, and streams live market data via WebSockets.
+TradePulse is a two-part trading system built with Python, Flask, and MetaTrader 5:
+
+1. **Trading CRM:** A real-time backend that auto-syncs trade history, calculates commissions, and streams live market data via WebSockets.
+2. **Master-Slave Trade Copier:** A low-latency system that instantly mirrors trades from a Master MT5 terminal to one or more Slave MT5 terminals using Redis.
 
 ---
 
-## Features
+## 🏗️ Architecture
 
-- 🔄 **MT5 Trade Sync** — Auto-syncs closed deals from MetaTrader 5, avoids duplicates
-- 💰 **Commission Engine** — Calculates $5/lot fees, stores results, notifies clients in real-time
-- 📡 **Live Market Data** — Streams bid/ask prices every second via WebSocket
-- 🔔 **Event Notifications** — Emits `commission_created` events on new commissions
-- 🗄️ **MySQL Database** — Users, Broker Accounts, Trades, Commissions with proper relations
-- ⚙️ **Background Sync** — APScheduler runs trade sync every 60 seconds automatically
+Because the official `MetaTrader5` Python package can only connect to **one terminal per process**, the system is split into independent workers communicating via a central database and Redis Pub/Sub.
 
----
+### 1. The Main Server (CRM)
+Runs the Flask API and a background scheduler (APScheduler).
+- **Responsibility:** Syncs closed trade history for the **Master** account every 60 seconds, calculates commissions, and streams live prices to web clients.
+- **Connection:** Connects only to the Master terminal defined in `.env`.
 
-## Tech Stack
+### 2. Copier Master Worker
+A standalone Python process.
+- **Responsibility:** Polls the Master MT5 terminal every 500ms. When a trade is opened or closed, it publishes a JSON signal to Redis.
 
-| Layer         | Technology                              |
-|---------------|-----------------------------------------|
-| API Framework | Flask 3, Blueprints                     |
-| Database      | MySQL + Flask-SQLAlchemy                |
-| WebSockets    | Flask-SocketIO + Eventlet               |
-| MT5 Bridge    | MetaTrader5 Python package (Windows)    |
-| Scheduler     | APScheduler                             |
+### 3. Copier Slave Worker
+A standalone Python process.
+- **Responsibility:** Listens to Redis. When it receives a signal, it instantly executes the trade on the Slave MT5 terminal. It then writes the executed trade directly into the TradePulse database (so the trade appears in the CRM immediately without waiting for the 60-second sync).
 
----
-
-## Project Structure
-
-```
-tradepulse/
-├── docs/                   # Planning documents
-├── models/                 # SQLAlchemy ORM models
-├── routes/                 # Flask REST API blueprints
-├── services/               # MT5 service, commission engine
-├── workers/                # APScheduler background jobs
-├── sockets/                # SocketIO event handlers
-├── live_data/              # Live market data broadcaster
-├── utils/                  # Shared helpers
-├── config.py               # Centralised configuration
-├── app.py                  # Flask app factory
-└── run.py                  # Entry point
+```mermaid
+graph TD
+    A[run.py (Main Server)] -->|Syncs History every 60s| DB[(MySQL Database)]
+    A -->|Reads| MasterTerminal(Master MT5)
+    
+    B[copier_master.py] -->|Polls every 500ms| MasterTerminal
+    B -->|Publishes OPEN/CLOSE| Redis((Redis))
+    
+    C[copier_slave.py] -->|Subscribes| Redis
+    C -->|Executes Trades| SlaveTerminal(Slave MT5)
+    C -->|Writes slave trades instantly| DB
 ```
 
 ---
 
-## Setup
+## 🚀 One-Click Setup
 
-### 1. Prerequisites
-- Python 3.11+
-- MySQL running locally
-- MetaTrader 5 terminal installed and logged in (Windows only)
+### Prerequisites
+1. **Python 3.10+**
+2. **MySQL** (Running locally on `localhost:3306`)
+3. **Redis** (Running as a Windows Service on `localhost:6379`)
+4. **Two MT5 Terminals installed** in separate folders (e.g. `C:\Program Files\MetaTrader 5` and `C:\Program Files\MT5slave`).
+5. **AutoTrading Enabled** in both terminals (the green ✅ button in the MT5 top toolbar).
 
-### 2. Clone & Install
+### 1. Configure `.env`
+Copy `.env.example` to `.env` and fill in your **Master** account details. Do NOT put the Slave account here.
 
-```bash
-git clone https://github.com/your-username/tradepulse.git
-cd tradepulse
+```ini
+DB_URI=mysql+pymysql://root:root@localhost/tradepulse
 
+# MetaTrader 5 (MASTER Account)
+MT5_LOGIN=5052406468
+MT5_PASSWORD=your_password
+MT5_SERVER=MetaQuotes-Demo
+
+REDIS_URL=redis://localhost:6379/0
+```
+
+### 2. Run the Installer
+Create a virtual environment and run the provided setup script. This will install all dependencies, run the database migrations, and configure your Master and Slave accounts in the database.
+
+```powershell
 python -m venv venv
-venv\Scripts\activate        # Windows
+.\venv\Scripts\activate
 
-pip install -r requirements.txt
+.\setup_copier.bat
 ```
 
-### 3. Configure Environment
+---
 
-```bash
-copy .env.example .env
-# Edit .env with your MySQL credentials and MT5 login details
-```
+## 🏃‍♂️ How to Run
 
-### 4. Create the Database
+Because of the single-terminal limit, the system requires **three separate processes** running simultaneously. 
 
-```sql
-CREATE DATABASE tradepulse CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
-```
+Open **three separate PowerShell windows**, activate your virtual environment in each (`.\venv\Scripts\activate`), and run:
 
-Tables are created automatically on first run via `db.create_all()`.
-
-### 5. Run
-
-```bash
+### Window 1: Main Server (CRM)
+```powershell
 python run.py
 ```
+*(Starts the Web API on `http://localhost:5000` and background trade sync).*
 
-Server starts at `http://localhost:5000`.
+### Window 2: Master Copier
+```powershell
+python workers\copier_master.py "C:\Program Files\MetaTrader 5\terminal64.exe" 1
+```
+*(Arguments: `<Terminal Path>` `<Master DB Account ID>`)*
+
+### Window 3: Slave Copier
+```powershell
+python workers\copier_slave.py "C:\Program Files\MT5slave\terminal64.exe" 1 1.0
+```
+*(Arguments: `<Terminal Path>` `<Master DB Account ID>` `<Volume Multiplier>`)*
 
 ---
 
-## REST API Reference
+## 🛠️ API & Integrations
 
 **Interactive Documentation (Swagger UI)**  
-Once the server is running, you can view the full OpenAPI 3.0 documentation and test endpoints interactively by visiting:  
+Once the main server is running, view the full OpenAPI 3.0 documentation at:  
 👉 **`http://localhost:5000/apidocs`**
 
-### Users
+### REST API Highlights
+- `POST /api/users` — Create users
+- `POST /api/accounts` — Link MT5 accounts to users
+- `GET /api/trades/<account_id>` — List trades
+- `GET /api/commissions/<account_id>` — List commissions ($5/lot fee automatically calculated)
 
-| Method | Endpoint            | Description         |
-|--------|---------------------|---------------------|
-| POST   | `/api/users`        | Create a user       |
-| GET    | `/api/users`        | List all users      |
-| GET    | `/api/users/<id>`   | Get user by ID      |
-| DELETE | `/api/users/<id>`   | Delete a user       |
-
-**Create user example:**
-```bash
-curl -X POST http://localhost:5000/api/users \
-  -H "Content-Type: application/json" \
-  -d '{"name": "Alice", "email": "alice@example.com"}'
-```
-
-### Broker Accounts
-
-| Method | Endpoint                   | Description               |
-|--------|----------------------------|---------------------------|
-| POST   | `/api/accounts`            | Add account to a user     |
-| GET    | `/api/accounts/<user_id>`  | List accounts for user    |
-| DELETE | `/api/accounts/<id>`       | Remove an account         |
-
-**Add account example:**
-```bash
-curl -X POST http://localhost:5000/api/accounts \
-  -H "Content-Type: application/json" \
-  -d '{"user_id": 1, "account_no": "123456", "broker_name": "DemoFX"}'
-```
-
-### Trades
-
-| Method | Endpoint                        | Description               |
-|--------|---------------------------------|---------------------------|
-| POST   | `/api/trades/sync/<account_id>` | Manual MT5 sync trigger   |
-| GET    | `/api/trades/<account_id>`      | List trades for account   |
-
-### Commissions
-
-| Method | Endpoint                              | Description                    |
-|--------|---------------------------------------|--------------------------------|
-| GET    | `/api/commissions/<account_id>`       | List commissions for account   |
-| GET    | `/api/commissions/trade/<trade_id>`   | Commission for a specific trade|
+### WebSockets
+Connect a Socket.IO client to `http://localhost:5000` to receive:
+- `market_data` — Live bid/ask ticks every 1 second
+- `commission_created` — Real-time alerts when a new commission is earned
 
 ---
 
-## WebSocket Guide
+## ⚠️ Troubleshooting
 
-Connect with any Socket.IO client:
-
-```python
-import socketio
-sio = socketio.Client()
-
-@sio.on("market_data")
-def on_data(data):
-    print(f"{data['symbol']}  bid={data['bid']}  ask={data['ask']}")
-
-@sio.on("commission_created")
-def on_commission(data):
-    print(f"Commission! Trade #{data['trade_id']}  ${data['amount_usd']}")
-
-sio.connect("http://localhost:5000")
-sio.emit("subscribe", {"symbols": ["EURUSD", "GBPUSD", "XAUUSD"]})
-sio.wait()
-```
-
-### Events
-
-| Event                | Direction       | Description                         |
-|----------------------|-----------------|-------------------------------------|
-| `subscribe`          | Client → Server | Subscribe to symbol price stream    |
-| `unsubscribe`        | Client → Server | Unsubscribe from symbols            |
-| `market_data`        | Server → Client | Live bid/ask tick (every 1 second)  |
-| `commission_created` | Server → Client | Fired when a new commission is saved|
-
----
-
-## Commission Rule
-
-```
-commission = volume (lots) × $5.00
-```
-
-Commissions are idempotent — running the engine twice for the same trade will not create duplicates.
-
----
-
-## Development Notes
-
-- **MT5 not installed?** The `MT5Service` detects this and runs in stub mode (returns empty data) — the rest of the app works normally.
-- **APScheduler + debug mode**: `use_reloader=False` is set in `run.py` to prevent the scheduler from starting twice.
-- **Duplicate trades**: Deduplicated by the MT5 `ticket` field (unique index on the `trades` table).
-
----
-
-## Architecture Constraints
-
-**The MT5 Single-Connection Limit:**
-The official `MetaTrader5` Python library can only maintain **one global connection** to the active terminal at a time. Therefore, the background `sync_worker.py` is configured to **only sync the account specified in your `.env` file**. 
-
-If you wish to scale this to a Multi-Account "Trade Copier", please see the advanced architecture plan located in `docs/master_slave_architecture.md`.
-
----
-
-## Testing
-
-A suite of manual integration tests is provided in the `tests/` directory to verify core functionality against a live MT5 terminal.
-
-```bash
-python tests/test_feature1.py   # Live Market Data WebSocket
-python tests/test_feature2.py   # Database Models & ORM
-python tests/test_feature3.py   # Manual Trade Sync & Deduplication
-python tests/test_feature4.py   # Commission Calculation Engine
-```
+- **Order send failed, retcode=10027**: "AutoTrading disabled by client". Click the AutoTrading button in the MT5 terminal toolbar to turn it green.
+- **Order send failed, retcode=10030**: "Unsupported filling mode". The workers auto-detect the supported filling mode, but ensure the symbol you are trading is actually available and visible in the Slave's Market Watch.
+- **Redis Connection Error**: Ensure Redis is running as a Windows Service (`services.msc` -> Redis).
+- **Cannot Manually Sync Slave Trades**: This is intentional. The Main Server is only connected to the Master terminal. Slave trades are written to the database automatically at the exact moment of execution by the `copier_slave.py` worker.
