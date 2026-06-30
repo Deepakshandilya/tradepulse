@@ -18,6 +18,9 @@ class Config:
     SQLALCHEMY_TRACK_MODIFICATIONS: bool = False
     SQLALCHEMY_ECHO: bool = False  # Set True to log SQL queries
 
+    # ── Redis (Trade Copier) ───────────────────────────────────────────────
+    REDIS_URL: str = os.getenv("REDIS_URL", "redis://localhost:6379/0")
+
     # ── MetaTrader 5 ───────────────────────────────────────────────────────
     _login_str = os.getenv("MT5_LOGIN", "")
     MT5_LOGIN: int = int(_login_str) if _login_str.isdigit() else ""

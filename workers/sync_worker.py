@@ -27,11 +27,15 @@ REAL_TRADE_TYPES = {0, 1}
 
 def sync_all_accounts(app, socketio) -> None:
     """
-    Sync MT5 trade history for every broker account in the database.
+    Sync MT5 trade history for MASTER and STANDALONE broker accounts.
+
+    SLAVE accounts are intentionally excluded here — their trades are written
+    directly to the database by copier_slave.py at the moment of execution.
+    Syncing them again from MT5 history would create duplicates.
+
     Runs inside an app context so SQLAlchemy sessions work correctly.
     Skips duplicate trades (by ticket) and non-trade MT5 operations.
     Calculates commissions for newly inserted trades.
-    Also syncs open positions (previously missing from the background worker).
     """
     with app.app_context():
         from models.broker_account import BrokerAccount
@@ -42,10 +46,16 @@ def sync_all_accounts(app, socketio) -> None:
 
         from config import Config
         env_account = str(Config.MT5_LOGIN)
-        
-        accounts = BrokerAccount.query.filter_by(account_no=env_account).all()
+
+        # Only sync accounts that are MASTER or STANDALONE.
+        # SLAVE accounts are handled by the copier worker — not via MT5 history sync.
+        accounts = BrokerAccount.query.filter(
+            BrokerAccount.account_no == env_account,
+            BrokerAccount.role.in_(["MASTER", "STANDALONE"])
+        ).all()
+
         if not accounts:
-            log.debug("No broker account matches the .env MT5_LOGIN (%s) — nothing to sync.", env_account)
+            log.debug("No MASTER/STANDALONE account matches MT5_LOGIN (%s) — nothing to sync.", env_account)
             return
 
         mt5 = MT5Service()

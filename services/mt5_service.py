@@ -216,6 +216,143 @@ class MT5Service:
             "decimals": decimals,   # expose so clients know display precision
         }
 
+    # ── Trade Execution ────────────────────────────────────────────────────
+
+    def execute_trade(self, symbol: str, trade_type: str, volume: float, deviation: int = 20) -> int | None:
+        """
+        Execute a market order on the currently connected MT5 terminal.
+        trade_type must be "BUY" or "SELL".
+        Returns the ticket number of the new position, or None on failure.
+        """
+        if not MT5_AVAILABLE:
+            log.error("MT5 not available — cannot execute trade.")
+            return None
+
+        self.ensure_connected()
+
+        # Ensure symbol is visible in market watch
+        mt5.symbol_select(symbol, True)
+        
+        info = mt5.symbol_info(symbol)
+        if info is None:
+            log.error(f"Symbol {symbol} not found.")
+            return None
+
+        if not info.visible:
+            log.error(f"Symbol {symbol} is not visible.")
+            return None
+
+        # Determine price and order type
+        if trade_type.upper() == "BUY":
+            order_type = mt5.ORDER_TYPE_BUY
+            price = mt5.symbol_info_tick(symbol).ask
+        elif trade_type.upper() == "SELL":
+            order_type = mt5.ORDER_TYPE_SELL
+            price = mt5.symbol_info_tick(symbol).bid
+        else:
+            log.error(f"Invalid trade_type: {trade_type}")
+            return None
+
+        # Auto-detect the correct filling mode supported by this broker/symbol.
+        # filling_mode is a bitmask: bit0=FOK(1), bit1=IOC(2), bit2=RETURN(4).
+        # Not all brokers support IOC — demo servers often only support FOK or RETURN.
+        filling_mode_map = {
+            1: mt5.ORDER_FILLING_FOK,
+            2: mt5.ORDER_FILLING_IOC,
+            4: mt5.ORDER_FILLING_RETURN,
+        }
+        filling_type = mt5.ORDER_FILLING_FOK  # default fallback
+        for bit, mode in filling_mode_map.items():
+            if info.filling_mode & bit:
+                filling_type = mode
+                break
+        log.debug(f"Using filling mode {filling_type} for {symbol} (broker filling_mode={info.filling_mode})")
+
+        request = {
+            "action": mt5.TRADE_ACTION_DEAL,
+            "symbol": symbol,
+            "volume": float(volume),
+            "type": order_type,
+            "price": price,
+            "deviation": deviation,
+            "magic": 123456,  # Magic number for copied trades
+            "comment": "TradePulse Copier",
+            "type_time": mt5.ORDER_TIME_GTC,
+            "type_filling": filling_type,
+        }
+
+        # Send order
+        result = mt5.order_send(request)
+        if result.retcode != mt5.TRADE_RETCODE_DONE:
+            log.error(f"Order send failed, retcode={result.retcode}: {result.comment}")
+            return None
+            
+        log.info(f"Trade executed successfully: Ticket {result.order} | {trade_type} {volume} {symbol}")
+        return result.order
+
+    def close_position(self, ticket: int, deviation: int = 20) -> bool:
+        """
+        Close an open position identified by its ticket number.
+        Returns True on success, False on failure.
+        """
+        if not MT5_AVAILABLE:
+            log.error("MT5 not available — cannot close position.")
+            return False
+
+        self.ensure_connected()
+
+        positions = mt5.positions_get(ticket=ticket)
+        if not positions:
+            log.warning(f"Position {ticket} not found — may already be closed.")
+            return False
+
+        pos = positions[0]
+        symbol = pos.symbol
+        mt5.symbol_select(symbol, True)
+
+        info = mt5.symbol_info(symbol)
+        if info is None:
+            log.error(f"Symbol {symbol} not found for closing ticket {ticket}.")
+            return False
+
+        # Opposite order type to close
+        if pos.type == mt5.POSITION_TYPE_BUY:
+            close_type = mt5.ORDER_TYPE_SELL
+            price = mt5.symbol_info_tick(symbol).bid
+        else:
+            close_type = mt5.ORDER_TYPE_BUY
+            price = mt5.symbol_info_tick(symbol).ask
+
+        # Auto-detect filling mode
+        filling_mode_map = {1: mt5.ORDER_FILLING_FOK, 2: mt5.ORDER_FILLING_IOC, 4: mt5.ORDER_FILLING_RETURN}
+        filling_type = mt5.ORDER_FILLING_FOK
+        for bit, mode in filling_mode_map.items():
+            if info.filling_mode & bit:
+                filling_type = mode
+                break
+
+        request = {
+            "action":       mt5.TRADE_ACTION_DEAL,
+            "symbol":       symbol,
+            "volume":       pos.volume,
+            "type":         close_type,
+            "position":     ticket,   # Required to close a specific position
+            "price":        price,
+            "deviation":    deviation,
+            "magic":        123456,
+            "comment":      "TradePulse Copier Close",
+            "type_time":    mt5.ORDER_TIME_GTC,
+            "type_filling": filling_type,
+        }
+
+        result = mt5.order_send(request)
+        if result.retcode != mt5.TRADE_RETCODE_DONE:
+            log.error(f"Close position failed, retcode={result.retcode}: {result.comment}")
+            return False
+
+        log.info(f"Position {ticket} closed successfully ({symbol} {pos.volume} lots).")
+        return True
+
     # ── Utilities ──────────────────────────────────────────────────────────
 
     @staticmethod

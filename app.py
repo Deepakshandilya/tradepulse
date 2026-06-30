@@ -95,10 +95,15 @@ SWAGGER_TEMPLATE = {
 }
 
 
-def create_app(config_class=None):
+def create_app(config_class=None, start_workers: bool = True):
     """
-    Application factory. Accepts an optional config class override
-    (useful for testing).
+    Application factory.
+
+    Args:
+        config_class:  Optional config class override (useful for testing).
+        start_workers: If False, skips starting APScheduler and the market data
+                       broadcast. Set to False in copier workers so they can
+                       access the DB without triggering background jobs.
     """
     from config import Config
     config_class = config_class or Config
@@ -145,12 +150,13 @@ def create_app(config_class=None):
     with app.app_context():
         db.create_all()
 
-    # ── Start background scheduler ─────────────────────────────────────────
-    from workers.sync_worker import start_scheduler
-    start_scheduler(app)
+    if start_workers:
+        # ── Start background scheduler ─────────────────────────────────────────
+        from workers.sync_worker import start_scheduler
+        start_scheduler(app)
 
-    # ── Start live market data broadcast ──────────────────────────────────
-    from live_data.market_data import start_market_broadcast
-    start_market_broadcast(socketio)
+        # ── Start live market data broadcast ──────────────────────────────────
+        from live_data.market_data import start_market_broadcast
+        start_market_broadcast(socketio)
 
     return app

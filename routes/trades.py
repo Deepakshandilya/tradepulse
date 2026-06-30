@@ -70,7 +70,16 @@ def sync_trades(account_id: int):
     if not account:
         return jsonify({"error": f"Account {account_id} not found"}), 404
 
+    from config import Config
+    if account.account_no != str(Config.MT5_LOGIN):
+        return jsonify({
+            "error": "Manual sync is only supported for the primary terminal "
+                     f"({Config.MT5_LOGIN}). Slave accounts are synced automatically "
+                     "by the copier_slave worker."
+        }), 400
+
     mt5 = MT5Service()
+
     try:
         mt5.connect()
         deals     = mt5.fetch_history()         # closed deals

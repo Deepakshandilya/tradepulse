@@ -18,18 +18,35 @@ class BrokerAccount(db.Model):
     broker_name = db.Column(db.String(100), nullable=False)
     created_at  = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
 
+    # Trade Copier Fields
+    role              = db.Column(db.String(20), default="STANDALONE")  # MASTER, SLAVE, STANDALONE
+    master_account_id = db.Column(db.Integer, db.ForeignKey("broker_accounts.id"), nullable=True)
+    volume_multiplier = db.Column(db.Float, default=1.0)
+    terminal_path     = db.Column(db.String(255), nullable=True)
+
     # Relationship: an account has many trades
     trades = db.relationship(
         "Trade", backref="account", lazy=True, cascade="all, delete-orphan"
     )
+    
+    # Relationship: a master can have many slaves
+    slaves = db.relationship(
+        "BrokerAccount", 
+        backref=db.backref("master", remote_side=[id]),
+        lazy="select"
+    )
 
     def to_dict(self) -> dict:
         return {
-            "id":          self.id,
-            "user_id":     self.user_id,
-            "account_no":  self.account_no,
-            "broker_name": self.broker_name,
-            "created_at":  self.created_at.isoformat() if self.created_at else None,
+            "id":                self.id,
+            "user_id":           self.user_id,
+            "account_no":        self.account_no,
+            "broker_name":       self.broker_name,
+            "role":              self.role,
+            "master_account_id": self.master_account_id,
+            "volume_multiplier": self.volume_multiplier,
+            "terminal_path":     self.terminal_path,
+            "created_at":        self.created_at.isoformat() if self.created_at else None,
         }
 
     def __repr__(self) -> str:
