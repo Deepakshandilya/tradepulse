@@ -83,6 +83,15 @@ def add_account():
         if not user:
             return jsonify({"error": f"User {user_id} not found"}), 404
 
+        # Check for duplicate: same account_no already registered for this user
+        existing = BrokerAccount.query.filter_by(
+            user_id=user_id, account_no=account_no
+        ).first()
+        if existing:
+            return jsonify({
+                "error": f"Account '{account_no}' is already linked to this user (id={existing.id})"
+            }), 409
+
         account = BrokerAccount(
             user_id=user_id,
             account_no=account_no,

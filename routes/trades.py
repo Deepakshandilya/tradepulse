@@ -14,6 +14,11 @@ from services.commission_engine import calculate_and_save
 
 trades_bp = Blueprint("trades", __name__)
 
+# ── MT5 deal types that are real trades (BUY=0, SELL=1) ───────────────────
+# All other types (2=BALANCE, 3=CREDIT, 4=CHARGE, 5=CORRECTION, 6=BONUS,
+# 7=COMMISSION, etc.) are internal broker operations — not actual trades.
+REAL_TRADE_TYPES = {0, 1}
+
 
 # ── POST /api/trades/sync/<account_id> ────────────────────────────────────
 @trades_bp.route("/trades/sync/<int:account_id>", methods=["POST"])
@@ -21,6 +26,7 @@ def sync_trades(account_id: int):
     """
     Manually trigger a sync of MT5 trade history for a given account.
     New trades are inserted; duplicates (by ticket) are skipped.
+    Non-trade MT5 operations (balance deposits, credits, etc.) are filtered out.
     Commissions are calculated for each newly inserted trade.
     ---
     tags:
@@ -52,6 +58,9 @@ def sync_trades(account_id: int):
                   type: integer
                 skipped:
                   type: integer
+                filtered:
+                  type: integer
+                  description: Non-trade MT5 operations excluded (deposits, credits, etc.)
       404:
         description: Account not found
       500:
@@ -67,12 +76,24 @@ def sync_trades(account_id: int):
         deals     = mt5.fetch_history()         # closed deals
         positions = mt5.fetch_open_positions()  # currently open positions
 
-        inserted  = 0
-        skipped   = 0
+        inserted   = 0
+        skipped    = 0
+        filtered   = 0   # non-trade MT5 ops (deposits, credits, etc.)
         new_trades = []
 
         # ── Process closed deals ───────────────────────────────────────────
         for deal in deals:
+            # Skip balance deposits, credit adjustments, commissions, etc.
+            # Only deal.type 0 (BUY) and 1 (SELL) are real Forex trades.
+            if deal.type not in REAL_TRADE_TYPES:
+                filtered += 1
+                continue
+
+            # Extra safety: skip any deal with no symbol or zero volume
+            if not deal.symbol or deal.volume == 0:
+                filtered += 1
+                continue
+
             if Trade.query.filter_by(ticket=deal.ticket).first():
                 skipped += 1
                 continue
@@ -97,6 +118,12 @@ def sync_trades(account_id: int):
 
         # ── Process open positions (ticket is position ID) ─────────────────
         for pos in positions:
+            # Open positions only have type 0 (BUY) or 1 (SELL) — no filter needed,
+            # but guard against edge cases.
+            if pos.type not in REAL_TRADE_TYPES:
+                filtered += 1
+                continue
+
             if Trade.query.filter_by(ticket=pos.ticket).first():
                 skipped += 1
                 continue
@@ -125,11 +152,12 @@ def sync_trades(account_id: int):
             calculate_and_save(trade, socketio)
 
         return jsonify({
-            "message":           "Sync complete",
-            "closed_deals_found": len(deals),
+            "message":             "Sync complete",
+            "closed_deals_found":  len(deals),
             "open_positions_found": len(positions),
-            "inserted":          inserted,
-            "skipped":           skipped,
+            "inserted":            inserted,
+            "skipped":             skipped,
+            "filtered":            filtered,
         }), 200
 
     except Exception as e:

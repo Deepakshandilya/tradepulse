@@ -1,7 +1,7 @@
 """
 Commission Engine — calculates and persists commissions for trades.
 
-Rule: $5 per lot traded.
+Rule: Configurable rate per lot (default $5/lot via Config.COMMISSION_PER_LOT).
 Design: idempotent — safe to call multiple times for the same trade.
 """
 
@@ -12,6 +12,7 @@ from typing import TYPE_CHECKING
 
 from app import db
 from models.commission import Commission
+from config import Config
 
 if TYPE_CHECKING:
     from flask_socketio import SocketIO
@@ -19,7 +20,8 @@ if TYPE_CHECKING:
 
 log = logging.getLogger(__name__)
 
-COMMISSION_PER_LOT: float = 5.0   # USD per lot
+# Read rate from central config — NOT hardcoded. Change in config.py or .env.
+COMMISSION_PER_LOT: float = Config.COMMISSION_PER_LOT
 
 
 def calculate_and_save(trade: "Trade", socketio: "SocketIO") -> Commission | None:

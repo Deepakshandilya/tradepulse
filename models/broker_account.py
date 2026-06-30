@@ -7,6 +7,11 @@ from app import db
 class BrokerAccount(db.Model):
     __tablename__ = "broker_accounts"
 
+    # Prevent the same MT5 account from being registered twice for the same user
+    __table_args__ = (
+        db.UniqueConstraint("user_id", "account_no", name="uq_user_account"),
+    )
+
     id          = db.Column(db.Integer, primary_key=True, autoincrement=True)
     user_id     = db.Column(db.Integer, db.ForeignKey("users.id"), nullable=False)
     account_no  = db.Column(db.String(50), nullable=False)   # MT5 account number
