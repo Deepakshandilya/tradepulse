@@ -42,7 +42,7 @@ graph TD
 ## 🚀 One-Click Setup
 
 ### Prerequisites
-1. **Python 3.10+**
+1. **Python 3.11+**
 2. **MySQL** (Running locally on `localhost:3306`)
 3. **Redis** (Running as a Windows Service on `localhost:6379`)
 4. **Two MT5 Terminals installed** in separate folders (e.g. `C:\Program Files\MetaTrader 5` and `C:\Program Files\MT5slave`).
