@@ -1,114 +1,81 @@
-# TradePulse Trade Copier — How to Run
+# TradePulse — Master/Slave Copier Setup Guide
 
-## Overview
-
-The Trade Copier mirrors every trade opened on the **Master** account (`5052406468`) to the **Slave** account (`109043772`) automatically.
-
-| Account | Role | MT5 Terminal |
-|---|---|---|
-| 5052406468 | MASTER | `C:\Program Files\MetaTrader 5\terminal64.exe` |
-| 109043772 | SLAVE | `C:\Program Files\MT5slave\terminal64.exe` |
+This guide explains how to set up and run the TradePulse Master-Slave Trade Copier. The copier architecture uses **Redis Pub/Sub** to send trade signals from a Master MT5 terminal instantly to one or more Slave MT5 terminals.
 
 ---
 
-## Prerequisites Checklist
+## 1. Prerequisites
 
-Before running, make sure:
+Before starting, ensure you have the following installed and running:
+1. **Python 3.10+** (and a virtual environment created with `python -m venv venv`)
+2. **MySQL** (Running locally on `localhost:3306`)
+3. **Redis** (Running as a Windows Service on `localhost:6379`)
+4. **Two MT5 Terminals installed** in separate folders (e.g. `C:\Program Files\MetaTrader 5` and `C:\Program Files\MT5slave`)
 
-- [ ] **Both MT5 terminals are open** and logged into their respective accounts.
-- [ ] **Redis is running** as a Windows service (installed via MSI). Do **NOT** run `redis-server` manually — it is already running in the background. You can verify by opening `services.msc` and checking that **Redis** service status is **Running**.
-- [ ] The **TradePulse venv** has been set up (`pip install -r requirements.txt`).
+> **IMPORTANT:** In both MT5 terminals, ensure you have **AutoTrading enabled** (the green ✅ button in the top toolbar).
 
 ---
 
-## Step-by-Step: Running the Copier
+## 2. Configuration (`.env`)
 
-Open **two separate PowerShell windows** in the TradePulse directory.
+Ensure your `.env` file exists and points to the **Master** account credentials. Do NOT point it to the Slave account. The background sync worker uses this to fetch history for the Master.
 
-### Window 1 — Start the Master Worker
+```ini
+DB_URI=mysql+pymysql://root:root@localhost/tradepulse
 
-The Master worker monitors account `5052406468` for new trades.
+# MetaTrader 5 (MASTER Account)
+MT5_LOGIN=5052406468
+MT5_PASSWORD=your_password
+MT5_SERVER=MetaQuotes-Demo
+
+REDIS_URL=redis://localhost:6379/0
+```
+
+---
+
+## 3. One-Click Setup
+
+To install dependencies, run database migrations, and seed the Master and Slave accounts in the database, simply run the batch script:
 
 ```powershell
-cd C:\Users\deeps\OneDrive\Desktop\tradepulse
-.\venv\Scripts\python.exe workers\copier_master.py "C:\Program Files\MetaTrader 5\terminal64.exe" 1
+# Make sure your virtual environment is activated first!
+.\venv\Scripts\activate
+
+# Run the setup script
+.\setup_copier.bat
 ```
 
-Expected output:
-```
-[INFO] Connecting to Master Terminal: C:\Program Files\MetaTrader 5\terminal64.exe
-[INFO] Connected to Redis.
-[INFO] Master 1 monitoring started...
-```
+*(If you prefer to run it manually, execute: `python scripts\migrate_copier.py` followed by `python scripts\setup_copier.py`).*
 
 ---
 
-### Window 2 — Start the Slave Worker
+## 4. Running the System
 
-The Slave worker listens for signals and copies trades to account `109043772`.
+The system requires three separate processes running simultaneously. Open **three separate PowerShell windows**, activate your virtual environment in each (`.\venv\Scripts\activate`), and run:
 
+### Window 1: Main Server & Background Jobs
+This runs the Flask API, WebSockets, and the APScheduler which fetches closed trade history for the Master account every 60 seconds.
 ```powershell
-cd C:\Users\deeps\OneDrive\Desktop\tradepulse
-.\venv\Scripts\python.exe workers\copier_slave.py "C:\Program Files\MT5slave\terminal64.exe" 1 1.0
+python run.py
 ```
 
-Expected output:
-```
-[INFO] Connecting to Slave Terminal: C:\Program Files\MT5slave\terminal64.exe
-[INFO] Connected to Redis.
-[INFO] Slave listening for signals from Master 1 with multiplier 1.0...
-```
-
----
-
-## Test It
-
-1. Open the Master MT5 terminal (`5052406468`).
-2. Place a BUY or SELL trade on any symbol (e.g. EURUSD, 0.01 lot).
-3. Within ~500ms you should see in the **Master window**:
-   ```
-   [INFO] Published OPEN signal: {'action': 'OPEN', 'symbol': 'EURUSD', ...}
-   ```
-4. And in the **Slave window**:
-   ```
-   [INFO] Received signal: {'action': 'OPEN', 'symbol': 'EURUSD', ...}
-   [INFO] Executing BUY on EURUSD with volume 0.01...
-   [INFO] Trade executed successfully: Ticket 12345678
-   ```
-5. Check the Slave MT5 terminal — the same trade should now be open!
-
----
-
-## Volume Multiplier
-
-The `1.0` at the end of the Slave command is the **volume multiplier**.
-
-| Value | Effect |
-|---|---|
-| `1.0` | Copy exact same volume as Master |
-| `0.5` | Copy half the volume |
-| `2.0` | Copy double the volume |
-
-To change it, restart the Slave worker with a different value:
+### Window 2: Master Copier
+This connects to the Master MT5 terminal. It polls for new open/closed trades every 500ms and publishes signals to Redis.
 ```powershell
-.\venv\Scripts\python.exe workers\copier_slave.py "C:\Program Files\MT5slave\terminal64.exe" 1 2.0
+python workers\copier_master.py "C:\Program Files\MetaTrader 5\terminal64.exe" 1
 ```
 
----
-
-## Stopping the Copier
-
-Press `Ctrl + C` in either PowerShell window to stop the respective worker.
-Stopping the Master means no new signals will be sent.
-Stopping the Slave means trades will no longer be copied.
+### Window 3: Slave Copier
+This listens to Redis for trade signals and instantly executes them on the Slave MT5 terminal. It also writes slave trades directly to the database so they appear instantly without waiting for a sync cycle.
+```powershell
+python workers\copier_slave.py "C:\Program Files\MT5slave\terminal64.exe" 1 1.0
+```
+*(The arguments are: `Terminal Path`, `Master Account ID`, and `Volume Multiplier`).*
 
 ---
 
 ## Troubleshooting
 
-| Error | Cause | Fix |
-|---|---|---|
-| `Redis connection failed: unknown command HELLO` | Redis server is v5 but Python redis client is v8 | Run: `.\venv\Scripts\python.exe -m pip install "redis<4.0"` |
-| `bind: An operation was attempted on something that is not a socket` | Redis is already running as a Windows service | This is normal — do NOT run `redis-server` again |
-| `initialize() failed` | MT5 terminal is not open | Open the MT5 terminal and log in before running the worker |
-| `Symbol not found` | Symbol not available on that broker | Make sure both accounts are on the same broker (MetaQuotes-Demo) |
+- **Redis Error (`unknown command HELLO`)**: Your Python `redis` package version is too new for your Redis 5.x server. Ensure you ran `pip install -r requirements.txt` which pins `redis<4.0`.
+- **Order send failed, retcode=10027**: "AutoTrading disabled by client". Click the AutoTrading button in the MT5 terminal toolbar to turn it green.
+- **Trades not showing for Slave**: Make sure you aren't clicking "Manual Sync" for the slave account in the web dashboard. Manual sync is only supported for the Master terminal. Slave trades are written to the database automatically at the moment of execution.
