@@ -26,15 +26,15 @@ A standalone Python process.
 
 ```mermaid
 graph TD
-    A[run.py (Main Server)] -->|Syncs History every 60s| DB[(MySQL Database)]
-    A -->|Reads| MasterTerminal(Master MT5)
+    A["run.py (Main Server)"] -->|"Syncs History every 60s"| DB[("MySQL Database")]
+    A -->|"Reads"| MasterTerminal["Master MT5"]
     
-    B[copier_master.py] -->|Polls every 500ms| MasterTerminal
-    B -->|Publishes OPEN/CLOSE| Redis((Redis))
+    B["copier_master.py"] -->|"Polls every 500ms"| MasterTerminal
+    B -->|"Publishes OPEN/CLOSE"| Redis[("Redis")]
     
-    C[copier_slave.py] -->|Subscribes| Redis
-    C -->|Executes Trades| SlaveTerminal(Slave MT5)
-    C -->|Writes slave trades instantly| DB
+    C["copier_slave.py"] -->|"Subscribes"| Redis
+    C -->|"Executes Trades"| SlaveTerminal["Slave MT5"]
+    C -->|"Writes slave trades instantly"| DB
 ```
 
 ---
