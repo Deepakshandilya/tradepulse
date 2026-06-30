@@ -93,6 +93,10 @@ Server starts at `http://localhost:5000`.
 
 ## REST API Reference
 
+**Interactive Documentation (Swagger UI)**  
+Once the server is running, you can view the full OpenAPI 3.0 documentation and test endpoints interactively by visiting:  
+👉 **`http://localhost:5000/apidocs`**
+
 ### Users
 
 | Method | Endpoint            | Description         |
@@ -187,3 +191,25 @@ Commissions are idempotent — running the engine twice for the same trade will 
 - **MT5 not installed?** The `MT5Service` detects this and runs in stub mode (returns empty data) — the rest of the app works normally.
 - **APScheduler + debug mode**: `use_reloader=False` is set in `run.py` to prevent the scheduler from starting twice.
 - **Duplicate trades**: Deduplicated by the MT5 `ticket` field (unique index on the `trades` table).
+
+---
+
+## Architecture Constraints
+
+**The MT5 Single-Connection Limit:**
+The official `MetaTrader5` Python library can only maintain **one global connection** to the active terminal at a time. Therefore, the background `sync_worker.py` is configured to **only sync the account specified in your `.env` file**. 
+
+If you wish to scale this to a Multi-Account "Trade Copier", please see the advanced architecture plan located in `docs/master_slave_architecture.md`.
+
+---
+
+## Testing
+
+A suite of manual integration tests is provided in the `tests/` directory to verify core functionality against a live MT5 terminal.
+
+```bash
+python tests/test_feature1.py   # Live Market Data WebSocket
+python tests/test_feature2.py   # Database Models & ORM
+python tests/test_feature3.py   # Manual Trade Sync & Deduplication
+python tests/test_feature4.py   # Commission Calculation Engine
+```
