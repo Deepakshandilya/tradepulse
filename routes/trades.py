@@ -39,6 +39,17 @@ def sync_trades(account_id: int):
         schema:
           type: integer
         description: The broker account ID to sync
+    requestBody:
+      required: false
+      content:
+        application/json:
+          schema:
+            type: object
+            properties:
+              days_back:
+                type: integer
+                example: 1
+                description: "Number of days back to sync history. Defaults to 1."
     responses:
       200:
         description: Sync complete

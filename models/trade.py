@@ -24,7 +24,7 @@ class Trade(db.Model):
     sl          = db.Column(db.Float, nullable=True)
     tp          = db.Column(db.Float, nullable=True)
     profit      = db.Column(db.Float,       default=0.0)
-    open_time   = db.Column(db.DateTime,    nullable=False)
+    open_time   = db.Column(db.DateTime,    nullable=True)
     close_time  = db.Column(db.DateTime,    nullable=True)
     
     status      = db.Column(db.String(20),  default="OPEN") # PENDING, OPEN, CLOSED, ERROR
@@ -36,17 +36,21 @@ class Trade(db.Model):
 
     def to_dict(self) -> dict:
         return {
-            "id":          self.id,
-            "account_id":  self.account_id,
-            "ticket":      self.ticket,
-            "symbol":      self.symbol,
-            "trade_type":  self.trade_type,
-            "volume":      self.volume,
-            "open_price":  self.open_price,
-            "close_price": self.close_price,
-            "profit":      self.profit,
-            "open_time":   self.open_time.isoformat()  if self.open_time  else None,
-            "close_time":  self.close_time.isoformat() if self.close_time else None,
+            "id":               self.id,
+            "account_id":       self.account_id,
+            "ticket":           self.ticket,
+            "master_ticket_id": self.master_ticket_id,
+            "symbol":           self.symbol,
+            "trade_type":       self.trade_type,
+            "volume":           self.volume,
+            "open_price":       self.open_price,
+            "close_price":      self.close_price,
+            "sl":               self.sl,
+            "tp":               self.tp,
+            "profit":           self.profit,
+            "open_time":        self.open_time.isoformat()  if self.open_time  else None,
+            "close_time":       self.close_time.isoformat() if self.close_time else None,
+            "status":           self.status,
         }
 
     def __repr__(self) -> str:

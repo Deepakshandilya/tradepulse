@@ -65,6 +65,15 @@ def add_account():
               terminal_path:
                 type: string
                 example: "C:/Program Files/MT5/terminal64.exe"
+              copy_sl_tp:
+                type: boolean
+                example: true
+              max_drawdown:
+                type: number
+                example: 10.0
+              is_active:
+                type: boolean
+                example: true
     responses:
       201:
         description: Account added successfully
@@ -104,6 +113,11 @@ def add_account():
         server_val = data.get("server")
         terminal_path_val = data.get("terminal_path")
 
+        # Risk Management & Status
+        copy_sl_tp_val = data.get("copy_sl_tp", True)
+        max_drawdown_val = data.get("max_drawdown")
+        is_active_val = data.get("is_active", True)
+
         if not user_id:
             return jsonify({"error": "Field 'user_id' is required"}), 400
         if not account_no:
@@ -141,7 +155,10 @@ def add_account():
             login=login_val,
             password_encrypted=encrypt_password(password_val) if password_val else None,
             server=server_val,
-            terminal_path=terminal_path_val
+            terminal_path=terminal_path_val,
+            copy_sl_tp=copy_sl_tp_val,
+            max_drawdown=max_drawdown_val,
+            is_active=is_active_val
         )
         db.session.add(account)
         db.session.commit()

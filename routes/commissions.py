@@ -9,6 +9,7 @@ from flask import Blueprint, jsonify
 from models.broker_account import BrokerAccount
 from models.trade import Trade
 from models.commission import Commission
+from app import db
 
 commissions_bp = Blueprint("commissions", __name__)
 

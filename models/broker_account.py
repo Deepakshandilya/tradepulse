@@ -56,7 +56,12 @@ class BrokerAccount(db.Model):
             "role":              self.role,
             "master_account_id": self.master_account_id,
             "volume_multiplier": self.volume_multiplier,
+            "login":             self.login,
+            "server":            self.server,
             "terminal_path":     self.terminal_path,
+            "copy_sl_tp":        self.copy_sl_tp,
+            "max_drawdown":      self.max_drawdown,
+            "is_active":         self.is_active,
             "created_at":        self.created_at.isoformat() if self.created_at else None,
         }
 
