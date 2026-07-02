@@ -128,13 +128,17 @@ class MT5Service:
 
     def fetch_history(
         self,
-        days_back: int = 365,
+        from_date: datetime | None = None,
+        to_date: datetime | None = None,
+        days_back: int = 1,
     ) -> List[Any]:
         """
         Fetch closed deals from MT5 history.
 
         Args:
-            days_back: How many days back to look. Default = 1 year.
+            from_date: Start date. If None, uses now() - days_back
+            to_date: End date. If None, uses now() + 1 day
+            days_back: How many days back to look if from_date is None. Default = 1 day.
 
         Returns:
             List of MT5 deal objects (or empty list on error / stub mode).
@@ -145,10 +149,13 @@ class MT5Service:
 
         self.ensure_connected()
 
-        from_date = datetime.now(timezone.utc) - timedelta(days=days_back)
-        # MT5 expects broker time. Since we are using UTC, we add 1 day to to_date
-        # to ensure we don't accidentally cut off recent deals if the broker is ahead of UTC.
-        to_date   = datetime.now(timezone.utc) + timedelta(days=1)
+        if from_date is None:
+            from_date = datetime.now(timezone.utc) - timedelta(days=days_back)
+        
+        if to_date is None:
+            # MT5 expects broker time. Since we are using UTC, we add 1 day to to_date
+            # to ensure we don't accidentally cut off recent deals if the broker is ahead of UTC.
+            to_date = datetime.now(timezone.utc) + timedelta(days=1)
 
         deals = mt5.history_deals_get(from_date, to_date)
         if deals is None:
@@ -313,7 +320,11 @@ class MT5Service:
         self.ensure_connected()
 
         positions = mt5.positions_get(ticket=ticket)
-        if not positions:
+        if positions is None:
+            log.error(f"Failed to get position {ticket}: {mt5.last_error()}")
+            return False
+            
+        if len(positions) == 0:
             log.warning(f"Position {ticket} not found — may already be closed.")
             return True
 
@@ -357,6 +368,10 @@ class MT5Service:
         }
 
         result = mt5.order_send(request)
+        if result is None:
+            log.error(f"Close position order_send failed completely: {mt5.last_error()}")
+            return False
+            
         if result.retcode != mt5.TRADE_RETCODE_DONE:
             log.error(f"Close position failed, retcode={result.retcode}: {result.comment}")
             return False
@@ -375,7 +390,11 @@ class MT5Service:
         self.ensure_connected()
 
         positions = mt5.positions_get(ticket=ticket)
-        if not positions:
+        if positions is None:
+            log.error(f"Failed to get position {ticket}: {mt5.last_error()}")
+            return False
+            
+        if len(positions) == 0:
             log.warning(f"Position {ticket} not found — cannot modify.")
             return False
 

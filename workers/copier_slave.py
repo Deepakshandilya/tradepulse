@@ -105,7 +105,7 @@ def _save_trade_to_db(app, slave_account_id: int, ticket: int, data: dict, copy_
 
 
 def _update_close_in_db(app, slave_ticket: int):
-    """Mark slave trade closed in DB with final close price + profit."""
+    """Mark slave trade as CLOSING in DB. The sync_worker will fetch final close price + profit."""
     try:
         from app import db
         from models.trade import Trade
@@ -116,27 +116,11 @@ def _update_close_in_db(app, slave_ticket: int):
                 log.warning(f"Trade {slave_ticket} not found in DB — cannot update close.")
                 return
 
-            time.sleep(1.0) # Keeping original delay to allow MT5 deal history to sync
-            
-            history = mt5.history_deals_get(
-                datetime.now(timezone.utc) - timedelta(days=1),
-                datetime.now(timezone.utc) + timedelta(days=1),
-            )
-            close_deal = None
-            if history:
-                for deal in history:
-                    if deal.position_id == slave_ticket and deal.entry == 1:
-                        close_deal = deal
-                        break
-
             trade.close_time = datetime.now(timezone.utc)
-            trade.status = "CLOSED"
-            if close_deal:
-                trade.close_price = close_deal.price
-                trade.profit      = close_deal.profit
+            trade.status = "CLOSING"
 
             db.session.commit()
-            log.info(f"Trade {slave_ticket} closed in DB (profit={getattr(close_deal, 'profit', '?')}).")
+            log.info(f"Trade {slave_ticket} marked as CLOSING in DB.")
     except Exception as e:
         log.error(f"Failed to update close in DB: {e}")
         raise e
@@ -196,6 +180,51 @@ def db_worker_loop(app):
         finally:
             db_queue.task_done()
 
+
+
+def closing_reconciliation_loop(app, slave_account_id: int, svc: MT5Service):
+    """Periodically reconcile CLOSING trades by fetching their final profit from MT5 history."""
+    from app import db
+    from models.trade import Trade
+    
+    while True:
+        try:
+            with app.app_context():
+                closing_trades = Trade.query.filter_by(
+                    account_id=slave_account_id, 
+                    status="CLOSING"
+                ).all()
+                
+                if not closing_trades:
+                    pass
+                else:
+                    # Fetch recent history once for all closing trades
+                    deals = svc.fetch_history(days_back=2)
+                    if deals:
+                        # Map position_id to exit deal (where entry == 1)
+                        exit_deals = {deal.position_id: deal for deal in deals if getattr(deal, 'entry', None) == 1}
+                        
+                        updated_count = 0
+                        for trade in closing_trades:
+                            # Ensure ticket type matches
+                            exit_deal = exit_deals.get(int(trade.ticket))
+                            if exit_deal:
+                                trade.close_price = exit_deal.price
+                                trade.profit = exit_deal.profit
+                                trade.status = "CLOSED"
+                                trade.close_time = svc.ts_to_datetime(exit_deal.time)
+                                updated_count += 1
+                            else:
+                                log.warning(f"Trade {trade.ticket} is CLOSING, but no exit deal found in MT5 history.")
+                                
+                        if updated_count > 0:
+                            db.session.commit()
+                            log.info(f"Reconciled {updated_count} CLOSING trades to CLOSED.")
+                    
+        except Exception as e:
+            log.error(f"Error in closing reconciliation loop: {e}")
+        finally:
+            time.sleep(Config.SLAVE_SYNC_INTERVAL_SECONDS)
 
 
 def _get_slave_ticket(app, slave_account_id: int, master_ticket_id: int) -> int | None:
@@ -280,6 +309,10 @@ def run_slave(terminal_path: str, master_account_id: int, volume_multiplier: flo
     )
     MT5Service._initialized = True
 
+    # Start Closing Reconciliation Thread
+    threading.Thread(target=closing_reconciliation_loop, args=(flask_app, slave_account_id, svc), daemon=True).start()
+    log.info("Started Closing Reconciliation Thread.")
+
     try:
         r = redis.from_url(Config.REDIS_URL)
         r.ping()
@@ -307,7 +340,14 @@ def run_slave(terminal_path: str, master_account_id: int, volume_multiplier: flo
 
     try:
         check_pending = True
+        last_pending_check = time.time()
+        
         while True:
+            # Actively retry unacknowledged messages every 30 seconds
+            if time.time() - last_pending_check > 30:
+                check_pending = True
+                last_pending_check = time.time()
+
             if check_pending:
                 # Read unacknowledged pending messages for this consumer
                 messages = r.xreadgroup(GROUP_NAME, CONSUMER_NAME, {STREAM_NAME: "0"}, count=5)

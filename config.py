@@ -28,7 +28,8 @@ class Config:
     MT5_SERVER: str = os.getenv("MT5_SERVER", "")
 
     # ── Background Jobs ────────────────────────────────────────────────────
-    TRADE_SYNC_INTERVAL_SECONDS: int = 60   # How often to auto-sync MT5 trades
+    MASTER_SYNC_INTERVAL_SECONDS: int = int(os.getenv("MASTER_SYNC_INTERVAL_SECONDS", 60))
+    SLAVE_SYNC_INTERVAL_SECONDS: int = int(os.getenv("SLAVE_SYNC_INTERVAL_SECONDS", 30))
     MARKET_DATA_INTERVAL_SECONDS: int = 1   # Live price broadcast interval
 
     # ── Commission ─────────────────────────────────────────────────────────

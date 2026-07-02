@@ -68,8 +68,13 @@ def sync_all_accounts(app, socketio) -> None:
         try:
             for account in accounts:
                 log.info("Syncing account #%d (%s)…", account.id, account.account_no)
-                deals     = mt5.fetch_history()
+                deals     = mt5.fetch_history(days_back=1)
                 positions = mt5.fetch_open_positions()  # ← was missing from worker
+
+                all_pos_ids = [str(d.position_id) for d in deals if getattr(d, 'type', None) in REAL_TRADE_TYPES] + \
+                              [str(p.ticket) for p in positions if getattr(p, 'type', None) in REAL_TRADE_TYPES]
+                
+                existing_trades = {int(t.ticket): t for t in Trade.query.filter(Trade.ticket.in_(all_pos_ids)).all()} if all_pos_ids else {}
 
                 inserted   = 0
                 skipped    = 0
@@ -92,7 +97,7 @@ def sync_all_accounts(app, socketio) -> None:
                     pos_id = deal.position_id
 
                     if deal.entry == 1:   # DEAL_ENTRY_OUT — update existing row
-                        existing = Trade.query.filter_by(ticket=pos_id).first()
+                        existing = existing_trades.get(pos_id)
                         if existing:
                             existing.close_price = deal.price
                             existing.close_time  = mt5.ts_to_datetime(deal.time)
@@ -124,11 +129,12 @@ def sync_all_accounts(app, socketio) -> None:
                             db.session.add(trade)
                             db.session.flush()
                             new_trades.append(trade)
+                            existing_trades[deal.ticket] = trade
                             inserted += 1
                         continue
 
                     # DEAL_ENTRY_IN — insert new row keyed by position_id
-                    if Trade.query.filter_by(ticket=pos_id).first():
+                    if existing_trades.get(pos_id):
                         skipped += 1
                         continue
 
@@ -151,6 +157,7 @@ def sync_all_accounts(app, socketio) -> None:
                     db.session.add(trade)
                     db.session.flush()
                     new_trades.append(trade)
+                    existing_trades[pos_id] = trade
                     inserted += 1
 
                 # ── Open positions ─────────────────────────────────────────
@@ -159,7 +166,7 @@ def sync_all_accounts(app, socketio) -> None:
                         filtered += 1
                         continue
 
-                    existing = Trade.query.filter_by(ticket=pos.ticket).first()
+                    existing = existing_trades.get(pos.ticket)
                     if existing:
                         existing.sl = getattr(pos, 'sl', existing.sl)
                         existing.tp = getattr(pos, 'tp', existing.tp)
@@ -187,6 +194,7 @@ def sync_all_accounts(app, socketio) -> None:
                     db.session.add(trade)
                     db.session.flush()
                     new_trades.append(trade)
+                    existing_trades[pos.ticket] = trade
                     inserted += 1
 
                 db.session.commit()
@@ -234,7 +242,7 @@ def start_scheduler(app) -> None:
     _scheduler.add_job(
         func=lambda: sync_all_accounts(app, _socketio),
         trigger="interval",
-        seconds=Config.TRADE_SYNC_INTERVAL_SECONDS,
+        seconds=Config.MASTER_SYNC_INTERVAL_SECONDS,
         id="sync_all_accounts",
         name="MT5 Trade Sync",
         replace_existing=True,
@@ -247,5 +255,5 @@ def start_scheduler(app) -> None:
     _scheduler.start()
     log.info(
         "APScheduler started — trade sync every %ds.",
-        Config.TRADE_SYNC_INTERVAL_SECONDS,
+        Config.MASTER_SYNC_INTERVAL_SECONDS,
     )

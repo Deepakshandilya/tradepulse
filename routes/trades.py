@@ -5,7 +5,7 @@ Endpoints:
   GET   /api/trades/<account_id>       — List trades for an account
 """
 
-from flask import Blueprint, jsonify
+from flask import Blueprint, jsonify, request
 from app import db, socketio
 from models.broker_account import BrokerAccount
 from models.trade import Trade
@@ -81,9 +81,17 @@ def sync_trades(account_id: int):
     mt5 = MT5Service()
 
     try:
+        data = request.get_json(silent=True) or {}
+        days_back = int(data.get("days_back", 1))
+
         mt5.connect()
-        deals     = mt5.fetch_history()         # closed deals
+        deals     = mt5.fetch_history(days_back=days_back)         # closed deals
         positions = mt5.fetch_open_positions()  # currently open positions
+
+        all_pos_ids = [d.position_id for d in deals if d.type in REAL_TRADE_TYPES] + \
+                      [p.ticket for p in positions if p.type in REAL_TRADE_TYPES]
+        
+        existing_trades = {t.ticket: t for t in Trade.query.filter(Trade.ticket.in_(all_pos_ids)).all()} if all_pos_ids else {}
 
         inserted   = 0
         skipped    = 0
@@ -107,7 +115,7 @@ def sync_trades(account_id: int):
             pos_id = deal.position_id   # shared key between entry and exit legs
 
             if deal.entry == 1:  # DEAL_ENTRY_OUT — closing leg, update existing row
-                existing = Trade.query.filter_by(ticket=pos_id).first()
+                existing = existing_trades.get(pos_id)
                 if existing:
                     existing.close_price = deal.price
                     existing.close_time  = mt5.ts_to_datetime(deal.time)
@@ -133,11 +141,12 @@ def sync_trades(account_id: int):
                     db.session.add(trade)
                     db.session.flush()
                     new_trades.append(trade)
+                    existing_trades[deal.ticket] = trade
                     inserted += 1
                 continue
 
             # DEAL_ENTRY_IN — opening leg, insert new row keyed by position_id
-            if Trade.query.filter_by(ticket=pos_id).first():
+            if existing_trades.get(pos_id):
                 skipped += 1
                 continue
 
@@ -157,6 +166,7 @@ def sync_trades(account_id: int):
             db.session.add(trade)
             db.session.flush()
             new_trades.append(trade)
+            existing_trades[pos_id] = trade
             inserted += 1
 
         # ── Process open positions (ticket is position ID) ─────────────────
@@ -167,7 +177,7 @@ def sync_trades(account_id: int):
                 filtered += 1
                 continue
 
-            if Trade.query.filter_by(ticket=pos.ticket).first():
+            if existing_trades.get(pos.ticket):
                 skipped += 1
                 continue
 
@@ -187,6 +197,7 @@ def sync_trades(account_id: int):
             db.session.add(trade)
             db.session.flush()
             new_trades.append(trade)
+            existing_trades[pos.ticket] = trade
             inserted += 1
 
         db.session.commit()
