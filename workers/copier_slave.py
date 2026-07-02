@@ -14,6 +14,8 @@ import json
 import logging
 import redis
 import time
+import threading
+import queue
 from datetime import datetime, timezone, timedelta
 
 from config import Config
@@ -60,6 +62,9 @@ except ImportError:
     MT5_AVAILABLE = False
 
 
+# ── Async DB Queue ────────────────────────────────────────────────────────────
+db_queue = queue.Queue()
+
 # ── DB Helpers ────────────────────────────────────────────────────────────────
 
 def _save_trade_to_db(app, slave_account_id: int, ticket: int, data: dict, copy_volume: float):
@@ -82,6 +87,8 @@ def _save_trade_to_db(app, slave_account_id: int, ticket: int, data: dict, copy_
                 trade_type       = data.get("trade_type"),
                 volume           = copy_volume,
                 open_price       = data.get("price_open"),
+                sl               = data.get("sl"),
+                tp               = data.get("tp"),
                 close_price      = None,
                 profit           = 0.0,
                 open_time        = datetime.now(timezone.utc),
@@ -134,6 +141,62 @@ def _update_close_in_db(app, slave_ticket: int):
         log.error(f"Failed to update close in DB: {e}")
         raise e
 
+def _update_sltp_in_db(app, slave_ticket: int, sl: float, tp: float):
+    try:
+        from app import db
+        from models.trade import Trade
+        with app.app_context():
+            trade = Trade.query.filter_by(ticket=slave_ticket).first()
+            if trade:
+                trade.sl = sl
+                trade.tp = tp
+                db.session.commit()
+    except Exception as e:
+        log.error(f"Failed to update SL/TP in DB: {e}")
+        raise e
+
+def _update_partial_close_in_db(app, slave_ticket: int, close_volume: float):
+    # For a partial close, we just reduce the volume of the open trade in DB.
+    try:
+        from app import db
+        from models.trade import Trade
+        with app.app_context():
+            trade = Trade.query.filter_by(ticket=slave_ticket).first()
+            if trade:
+                trade.volume = max(0.0, round(trade.volume - close_volume, 2))
+                db.session.commit()
+    except Exception as e:
+        log.error(f"Failed to update partial close in DB: {e}")
+        raise e
+
+def db_worker_loop(app):
+    """Background thread loop to process DB writes asynchronously."""
+    # We create a separate redis connection for the thread to XACK
+    r = redis.from_url(Config.REDIS_URL)
+    while True:
+        task = db_queue.get()
+        if task is None:
+            break
+        
+        try:
+            action = task.get("action")
+            if action == "OPEN":
+                _save_trade_to_db(app, task["slave_account_id"], task["slave_ticket"], task["data"], task["copy_volume"])
+            elif action == "CLOSE":
+                _update_close_in_db(app, task["slave_ticket"])
+            elif action == "MODIFY":
+                _update_sltp_in_db(app, task["slave_ticket"], task["sl"], task["tp"])
+            elif action == "PARTIAL_CLOSE":
+                _update_partial_close_in_db(app, task["slave_ticket"], task["close_volume"])
+            
+            # XACK message after successful DB update
+            r.xack(task["stream_name"], task["group_name"], task["message_id"])
+        except Exception as e:
+            log.error(f"Async DB worker failed for {task.get('action')}: {e}")
+        finally:
+            db_queue.task_done()
+
+
 
 def _get_slave_ticket(app, slave_account_id: int, master_ticket_id: int) -> int | None:
     """Look up slave ticket from DB mapping."""
@@ -159,6 +222,10 @@ def run_slave(terminal_path: str, master_account_id: int, volume_multiplier: flo
     from app import create_app
     flask_app = create_app(start_workers=False)
     log.info("Flask app context ready (no scheduler started).")
+
+    # Start Async DB Worker Thread
+    threading.Thread(target=db_worker_loop, args=(flask_app,), daemon=True).start()
+    log.info("Started Async DB Worker Thread.")
 
     # Look up slave account DB ID and credentials
     slave_account_id = None
@@ -224,7 +291,7 @@ def run_slave(terminal_path: str, master_account_id: int, volume_multiplier: flo
     # Setup Redis Streams Consumer Group
     STREAM_NAME = "trade_stream"
     GROUP_NAME = f"slave_group_{slave_account_id}"
-    CONSUMER_NAME = f"consumer_{os.getpid()}"
+    CONSUMER_NAME = f"consumer_{slave_account_id}"
 
     try:
         r.xgroup_create(STREAM_NAME, GROUP_NAME, id="0", mkstream=True)
@@ -239,12 +306,20 @@ def run_slave(terminal_path: str, master_account_id: int, volume_multiplier: flo
     log.info(f"Listening for signals from Master ID={master_account_id}  multiplier={volume_multiplier}x")
 
     try:
+        check_pending = True
         while True:
-            # Block for up to 1000ms
-            messages = r.xreadgroup(GROUP_NAME, CONSUMER_NAME, {STREAM_NAME: ">"}, count=5, block=1000)
-            
-            if not messages:
-                continue
+            if check_pending:
+                # Read unacknowledged pending messages for this consumer
+                messages = r.xreadgroup(GROUP_NAME, CONSUMER_NAME, {STREAM_NAME: "0"}, count=5)
+                if not messages or not messages[0][1]:
+                    check_pending = False
+                    continue
+            else:
+                # Block for up to 1000ms for new messages
+                messages = r.xreadgroup(GROUP_NAME, CONSUMER_NAME, {STREAM_NAME: ">"}, count=5, block=1000)
+                
+                if not messages:
+                    continue
 
             for stream, msgs in messages:
                 for message_id, msg_data in msgs:
@@ -264,6 +339,8 @@ def run_slave(terminal_path: str, master_account_id: int, volume_multiplier: flo
                             copy_volume   = round(data.get("volume", 0.0) * volume_multiplier, 2)
                             symbol        = data.get("symbol")
                             trade_type    = data.get("trade_type")
+                            sl            = data.get("sl", 0.0)
+                            tp            = data.get("tp", 0.0)
 
                             # Idempotency check: Did we already process this?
                             existing_ticket = _get_slave_ticket(flask_app, slave_account_id, master_ticket)
@@ -274,15 +351,22 @@ def run_slave(terminal_path: str, master_account_id: int, volume_multiplier: flo
 
                             log.info(f">> OPEN  {trade_type:4s} {symbol:10s} vol={copy_volume} (master ticket={master_ticket})")
 
-                            slave_ticket = svc.execute_trade(symbol=symbol, trade_type=trade_type, volume=copy_volume)
+                            slave_ticket = svc.execute_trade(symbol=symbol, trade_type=trade_type, volume=copy_volume, sl=sl, tp=tp)
 
                             if slave_ticket:
                                 log.info(f"   Copied! master={master_ticket} -> slave={slave_ticket}")
-                                _save_trade_to_db(flask_app, slave_account_id, slave_ticket, data, copy_volume)
-                                r.xack(STREAM_NAME, GROUP_NAME, message_id)
+                                db_queue.put({
+                                    "action": "OPEN",
+                                    "slave_account_id": slave_account_id,
+                                    "slave_ticket": slave_ticket,
+                                    "data": data,
+                                    "copy_volume": copy_volume,
+                                    "stream_name": STREAM_NAME,
+                                    "group_name": GROUP_NAME,
+                                    "message_id": message_id
+                                })
                             else:
                                 log.error(f"   Failed to copy trade (master ticket={master_ticket}). Will retry.")
-                                # We do NOT xack. It will remain in PEL (Pending Entries List).
 
                         # ── CLOSE ───────────────────────────────────────────────────────────
                         elif action == "CLOSE":
@@ -298,10 +382,69 @@ def run_slave(terminal_path: str, master_account_id: int, volume_multiplier: flo
 
                             success = svc.close_position(slave_ticket)
                             if success:
-                                _update_close_in_db(flask_app, slave_ticket)
-                                r.xack(STREAM_NAME, GROUP_NAME, message_id)
+                                db_queue.put({
+                                    "action": "CLOSE",
+                                    "slave_ticket": slave_ticket,
+                                    "stream_name": STREAM_NAME,
+                                    "group_name": GROUP_NAME,
+                                    "message_id": message_id
+                                })
                             else:
                                 log.error(f"   Failed to close slave position {slave_ticket}. Will retry.")
+
+                        # ── PARTIAL CLOSE ───────────────────────────────────────────────────
+                        elif action == "PARTIAL_CLOSE":
+                            master_ticket = data.get("ticket")
+                            close_volume  = round(data.get("close_volume", 0.0) * volume_multiplier, 2)
+                            slave_ticket = _get_slave_ticket(flask_app, slave_account_id, master_ticket)
+
+                            if slave_ticket is None:
+                                log.warning(f"<< PARTIAL CLOSE master={master_ticket}: no slave mapping found in DB.")
+                                r.xack(STREAM_NAME, GROUP_NAME, message_id)
+                                continue
+
+                            log.info(f"<< PARTIAL CLOSE {data.get('symbol'):10s} slave_ticket={slave_ticket} vol={close_volume}")
+
+                            success = svc.close_position(slave_ticket, volume=close_volume)
+                            if success:
+                                db_queue.put({
+                                    "action": "PARTIAL_CLOSE",
+                                    "slave_ticket": slave_ticket,
+                                    "close_volume": close_volume,
+                                    "stream_name": STREAM_NAME,
+                                    "group_name": GROUP_NAME,
+                                    "message_id": message_id
+                                })
+                            else:
+                                log.error(f"   Failed to partially close position {slave_ticket}. Will retry.")
+
+                        # ── MODIFY ──────────────────────────────────────────────────────────
+                        elif action == "MODIFY":
+                            master_ticket = data.get("ticket")
+                            sl            = data.get("sl", 0.0)
+                            tp            = data.get("tp", 0.0)
+                            slave_ticket = _get_slave_ticket(flask_app, slave_account_id, master_ticket)
+
+                            if slave_ticket is None:
+                                log.warning(f"~~ MODIFY master={master_ticket}: no slave mapping found in DB.")
+                                r.xack(STREAM_NAME, GROUP_NAME, message_id)
+                                continue
+
+                            log.info(f"~~ MODIFY {data.get('symbol'):10s} slave_ticket={slave_ticket} sl={sl} tp={tp}")
+
+                            success = svc.modify_position(slave_ticket, sl=sl, tp=tp)
+                            if success:
+                                db_queue.put({
+                                    "action": "MODIFY",
+                                    "slave_ticket": slave_ticket,
+                                    "sl": sl,
+                                    "tp": tp,
+                                    "stream_name": STREAM_NAME,
+                                    "group_name": GROUP_NAME,
+                                    "message_id": message_id
+                                })
+                            else:
+                                log.error(f"   Failed to modify position {slave_ticket}. Will retry.")
                                 
                     except Exception as e:
                         log.error(f"Error processing message {message_id}: {e}")

@@ -98,6 +98,8 @@ def sync_all_accounts(app, socketio) -> None:
                             existing.close_time  = mt5.ts_to_datetime(deal.time)
                             existing.profit      = deal.profit
                             existing.status      = "CLOSED"
+                            existing.sl          = getattr(deal, 'sl', getattr(existing, 'sl', 0.0))
+                            existing.tp          = getattr(deal, 'tp', getattr(existing, 'tp', 0.0))
                             db.session.flush()
                             skipped += 1
                         else:
@@ -111,6 +113,8 @@ def sync_all_accounts(app, socketio) -> None:
                                 trade_type  = trade_type,
                                 volume      = deal.volume,
                                 open_price  = None,
+                                sl          = getattr(deal, 'sl', 0.0),
+                                tp          = getattr(deal, 'tp', 0.0),
                                 close_price = deal.price,
                                 profit      = deal.profit,
                                 open_time   = None,
@@ -137,6 +141,8 @@ def sync_all_accounts(app, socketio) -> None:
                         trade_type  = trade_type,
                         volume      = deal.volume,
                         open_price  = deal.price,
+                        sl          = getattr(deal, 'sl', 0.0),
+                        tp          = getattr(deal, 'tp', 0.0),
                         close_price = None,
                         profit      = deal.profit,
                         open_time   = mt5.ts_to_datetime(deal.time),
@@ -153,7 +159,11 @@ def sync_all_accounts(app, socketio) -> None:
                         filtered += 1
                         continue
 
-                    if Trade.query.filter_by(ticket=pos.ticket).first():
+                    existing = Trade.query.filter_by(ticket=pos.ticket).first()
+                    if existing:
+                        existing.sl = getattr(pos, 'sl', existing.sl)
+                        existing.tp = getattr(pos, 'tp', existing.tp)
+                        db.session.flush()
                         skipped += 1
                         continue
 
@@ -167,6 +177,8 @@ def sync_all_accounts(app, socketio) -> None:
                         trade_type  = trade_type,
                         volume      = pos.volume,
                         open_price  = pos.price_open,
+                        sl          = getattr(pos, 'sl', 0.0),
+                        tp          = getattr(pos, 'tp', 0.0),
                         close_price = None,
                         profit      = pos.profit,
                         open_time   = mt5.ts_to_datetime(pos.time),

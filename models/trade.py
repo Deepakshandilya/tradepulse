@@ -19,8 +19,10 @@ class Trade(db.Model):
     symbol      = db.Column(db.String(20),  nullable=False)   # e.g. EURUSD
     trade_type  = db.Column(db.String(10),  nullable=False)   # BUY / SELL
     volume      = db.Column(db.Float,       nullable=False)   # lots
-    open_price  = db.Column(db.Float,       nullable=False)
-    close_price = db.Column(db.Float,       nullable=True)
+    open_price  = db.Column(db.Float)
+    close_price = db.Column(db.Float, nullable=True)
+    sl          = db.Column(db.Float, nullable=True)
+    tp          = db.Column(db.Float, nullable=True)
     profit      = db.Column(db.Float,       default=0.0)
     open_time   = db.Column(db.DateTime,    nullable=False)
     close_time  = db.Column(db.DateTime,    nullable=True)

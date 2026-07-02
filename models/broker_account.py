@@ -28,6 +28,11 @@ class BrokerAccount(db.Model):
     password_encrypted = db.Column(db.LargeBinary, nullable=True)
     server             = db.Column(db.String(100), nullable=True)
     terminal_path      = db.Column(db.String(255), nullable=True, unique=True)
+    
+    # Granular Risk Management
+    copy_sl_tp   = db.Column(db.Boolean, default=True)
+    max_drawdown = db.Column(db.Float, nullable=True)
+    is_active    = db.Column(db.Boolean, default=True)
 
 
     # Relationship: an account has many trades

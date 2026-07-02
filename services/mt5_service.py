@@ -223,7 +223,7 @@ class MT5Service:
 
     # ── Trade Execution ────────────────────────────────────────────────────
 
-    def execute_trade(self, symbol: str, trade_type: str, volume: float, deviation: int = 20) -> int | None:
+    def execute_trade(self, symbol: str, trade_type: str, volume: float, deviation: int = 20, sl: float = 0.0, tp: float = 0.0) -> int | None:
         """
         Execute a market order on the currently connected MT5 terminal.
         trade_type must be "BUY" or "SELL".
@@ -285,6 +285,11 @@ class MT5Service:
             "type_time": mt5.ORDER_TIME_GTC,
             "type_filling": filling_type,
         }
+        
+        if sl > 0.0:
+            request["sl"] = float(sl)
+        if tp > 0.0:
+            request["tp"] = float(tp)
 
         # Send order
         result = mt5.order_send(request)
@@ -295,9 +300,10 @@ class MT5Service:
         log.info(f"Trade executed successfully: Ticket {result.order} | {trade_type} {volume} {symbol}")
         return result.order
 
-    def close_position(self, ticket: int, deviation: int = 20) -> bool:
+    def close_position(self, ticket: int, deviation: int = 20, volume: float = None) -> bool:
         """
         Close an open position identified by its ticket number.
+        If volume is provided, partially closes that volume. Otherwise closes entire position.
         Returns True on success, False on failure.
         """
         if not MT5_AVAILABLE:
@@ -309,7 +315,7 @@ class MT5Service:
         positions = mt5.positions_get(ticket=ticket)
         if not positions:
             log.warning(f"Position {ticket} not found — may already be closed.")
-            return False
+            return True
 
         pos = positions[0]
         symbol = pos.symbol
@@ -339,7 +345,7 @@ class MT5Service:
         request = {
             "action":       mt5.TRADE_ACTION_DEAL,
             "symbol":       symbol,
-            "volume":       pos.volume,
+            "volume":       float(volume) if volume is not None else pos.volume,
             "type":         close_type,
             "position":     ticket,   # Required to close a specific position
             "price":        price,
@@ -356,6 +362,39 @@ class MT5Service:
             return False
 
         log.info(f"Position {ticket} closed successfully ({symbol} {pos.volume} lots).")
+        return True
+
+    def modify_position(self, ticket: int, sl: float, tp: float) -> bool:
+        """
+        Modify Stop Loss and Take Profit for an existing position.
+        """
+        if not MT5_AVAILABLE:
+            log.error("MT5 not available — cannot modify position.")
+            return False
+
+        self.ensure_connected()
+
+        positions = mt5.positions_get(ticket=ticket)
+        if not positions:
+            log.warning(f"Position {ticket} not found — cannot modify.")
+            return False
+
+        pos = positions[0]
+        
+        request = {
+            "action": mt5.TRADE_ACTION_SLTP,
+            "symbol": pos.symbol,
+            "position": ticket,
+            "sl": float(sl),
+            "tp": float(tp),
+        }
+
+        result = mt5.order_send(request)
+        if result.retcode != mt5.TRADE_RETCODE_DONE:
+            log.error(f"Modify position failed, retcode={result.retcode}: {result.comment}")
+            return False
+
+        log.info(f"Position {ticket} modified successfully (SL={sl}, TP={tp}).")
         return True
 
     # ── Utilities ──────────────────────────────────────────────────────────

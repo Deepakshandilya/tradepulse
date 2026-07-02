@@ -142,10 +142,49 @@ def run_master(terminal_path: str, master_account_id: int):
                         "trade_type":        trade_type,
                         "volume":            p.volume,
                         "price_open":        p.price_open,
+                        "sl":                getattr(p, 'sl', 0.0),
+                        "tp":                getattr(p, 'tp', 0.0),
                     }
                     # Redis Streams XADD
                     r.xadd("trade_stream", {"action": msg["action"], "payload": json.dumps(msg)})
-                    log.info(f">> OPEN  {trade_type:4s} {p.symbol:10s} vol={p.volume} ticket={ticket}")
+                    log.info(f">> OPEN  {trade_type:4s} {p.symbol:10s} vol={p.volume} ticket={ticket} sl={msg['sl']} tp={msg['tp']}")
+
+            # ── Detect MODIFIED positions (SL/TP changes or Partial Close) ──
+            common_tickets = set(current_positions.keys()).intersection(set(known_positions.keys()))
+            for ticket in common_tickets:
+                curr_p = current_positions[ticket]
+                old_p = known_positions[ticket]
+
+                # Check for volume reduction (Partial Close)
+                if curr_p.volume < old_p.volume:
+                    closed_volume = round(old_p.volume - curr_p.volume, 2)
+                    msg = {
+                        "action":            "PARTIAL_CLOSE",
+                        "master_account_id": master_account_id,
+                        "ticket":            ticket,
+                        "symbol":            curr_p.symbol,
+                        "close_volume":      closed_volume
+                    }
+                    r.xadd("trade_stream", {"action": msg["action"], "payload": json.dumps(msg)})
+                    log.info(f"<< PARTIAL CLOSE {curr_p.symbol:10s} ticket={ticket} vol_closed={closed_volume}")
+
+                # Check for SL/TP modifications
+                curr_sl = getattr(curr_p, 'sl', 0.0)
+                curr_tp = getattr(curr_p, 'tp', 0.0)
+                old_sl = getattr(old_p, 'sl', 0.0)
+                old_tp = getattr(old_p, 'tp', 0.0)
+
+                if curr_sl != old_sl or curr_tp != old_tp:
+                    msg = {
+                        "action":            "MODIFY",
+                        "master_account_id": master_account_id,
+                        "ticket":            ticket,
+                        "symbol":            curr_p.symbol,
+                        "sl":                curr_sl,
+                        "tp":                curr_tp
+                    }
+                    r.xadd("trade_stream", {"action": msg["action"], "payload": json.dumps(msg)})
+                    log.info(f"~~ MODIFY {curr_p.symbol:10s} ticket={ticket} new_sl={curr_sl} new_tp={curr_tp}")
 
             # ── Detect CLOSED positions (CLOSE signal) ──────────────────────
             closed_tickets = set(known_positions.keys()) - set(current_positions.keys())

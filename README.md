@@ -3,26 +3,32 @@
 TradePulse is a two-part trading system built with Python, Flask, and MetaTrader 5:
 
 1. **Trading CRM:** A real-time backend that auto-syncs trade history, calculates commissions, and streams live market data via WebSockets.
-2. **Master-Slave Trade Copier:** A low-latency system that instantly mirrors trades from a Master MT5 terminal to one or more Slave MT5 terminals using Redis.
+2. **Master-Slave Trade Copier:** A highly scalable, low-latency system that instantly mirrors trades from a Master MT5 terminal to one or more Slave MT5 terminals using Redis Streams.
 
 ---
 
 ## 🏗️ Architecture
 
-Because the official `MetaTrader5` Python package can only connect to **one terminal per process**, the system is split into independent workers communicating via a central database and Redis Pub/Sub.
+Because the official `MetaTrader5` Python package can only connect to **one terminal per process**, the system is split into independent workers communicating via a central database and a persistent message queue (Redis Streams).
 
 ### 1. The Main Server (CRM)
 Runs the Flask API and a background scheduler (APScheduler).
 - **Responsibility:** Syncs closed trade history for the **Master** account every 60 seconds, calculates commissions, and streams live prices to web clients.
 - **Connection:** Connects only to the Master terminal defined in `.env`.
 
-### 2. Copier Master Worker
+### 2. Copier Master Worker (`copier_master.py`)
 A standalone Python process.
-- **Responsibility:** Polls the Master MT5 terminal every 500ms. When a trade is opened or closed, it publishes a JSON signal to Redis.
+- **Responsibility:** Polls the Master MT5 terminal every 500ms. 
+- **Features:** Detects new positions (`OPEN`), closed positions (`CLOSE`), Stop Loss / Take Profit modifications (`MODIFY`), and volume reductions (`PARTIAL_CLOSE`).
+- **Delivery:** Publishes these events to a **Redis Stream**.
 
-### 3. Copier Slave Worker
+### 3. Copier Slave Worker (`copier_slave.py`)
 A standalone Python process.
-- **Responsibility:** Listens to Redis. When it receives a signal, it instantly executes the trade on the Slave MT5 terminal. It then writes the executed trade directly into the TradePulse database (so the trade appears in the CRM immediately without waiting for the 60-second sync).
+- **Responsibility:** Listens to Redis Streams using a **Consumer Group**. This guarantees reliable message delivery—if the slave disconnects, signals queue up and are processed upon reconnection.
+- **Asynchronous Execution:** 
+  - The main event loop reads from Redis and instantly executes the MT5 action.
+  - Slower operations (like querying MT5 history and writing to the SQL database) are offloaded to an **Asynchronous Background Thread**. This prevents database latency from causing trade slippage.
+- **Idempotency:** Reconciles state using the database (mapping `master_ticket_id` to `slave_ticket`) to ensure trades are never double-copied.
 
 ```mermaid
 graph TD
@@ -30,11 +36,11 @@ graph TD
     A -->|"Reads"| MasterTerminal["Master MT5"]
     
     B["copier_master.py"] -->|"Polls every 500ms"| MasterTerminal
-    B -->|"Publishes OPEN/CLOSE"| Redis[("Redis")]
+    B -->|"Publishes events"| Redis[("Redis Streams")]
     
-    C["copier_slave.py"] -->|"Subscribes"| Redis
-    C -->|"Executes Trades"| SlaveTerminal["Slave MT5"]
-    C -->|"Writes slave trades instantly"| DB
+    C["copier_slave.py"] -->|"Subscribes via Consumer Group"| Redis
+    C -->|"Executes Trades Instantly"| SlaveTerminal["Slave MT5"]
+    C -->|"Async Background Writes"| DB
 ```
 
 ---
@@ -49,7 +55,7 @@ graph TD
 5. **AutoTrading Enabled** in both terminals (the green ✅ button in the MT5 top toolbar).
 
 ### 1. Configure `.env`
-Copy `.env.example` to `.env` and fill in your **Master** account details. Do NOT put the Slave account here.
+Copy `.env.example` to `.env` and fill in your **Master** account details. Do NOT put the Slave account here. The system also requires an `ENCRYPTION_KEY` for securely storing passwords.
 
 ```ini
 DB_URI=mysql+pymysql://root:root@localhost/tradepulse
@@ -60,6 +66,9 @@ MT5_PASSWORD=your_password
 MT5_SERVER=MetaQuotes-Demo
 
 REDIS_URL=redis://localhost:6379/0
+
+# Generated via utils/encryption.py
+ENCRYPTION_KEY=your_fernet_key
 ```
 
 ### 2. Run the Installer
@@ -70,6 +79,12 @@ python -m venv venv
 .\venv\Scripts\activate
 
 .\setup_copier.bat
+```
+
+### 3. Securely Set Slave Credentials
+Since `copier_slave.py` is fully decoupled, it reads encrypted credentials directly from the database to log into the correct terminal. Update the slave account's credentials:
+```powershell
+python scripts\set_credentials.py 3 "your_slave_password" "MetaQuotes-Demo"
 ```
 
 ---
@@ -108,7 +123,7 @@ Once the main server is running, view the full OpenAPI 3.0 documentation at:
 
 ### REST API Highlights
 - `POST /api/users` — Create users
-- `POST /api/accounts` — Link MT5 accounts to users
+- `POST /api/accounts` — Link MT5 accounts to users (includes granular risk settings like `copy_sl_tp` and `max_drawdown`)
 - `GET /api/trades/<account_id>` — List trades
 - `GET /api/commissions/<account_id>` — List commissions ($5/lot fee automatically calculated)
 
@@ -124,4 +139,4 @@ Connect a Socket.IO client to `http://localhost:5000` to receive:
 - **Order send failed, retcode=10027**: "AutoTrading disabled by client". Click the AutoTrading button in the MT5 terminal toolbar to turn it green.
 - **Order send failed, retcode=10030**: "Unsupported filling mode". The workers auto-detect the supported filling mode, but ensure the symbol you are trading is actually available and visible in the Slave's Market Watch.
 - **Redis Connection Error**: Ensure Redis is running as a Windows Service (`services.msc` -> Redis).
-- **Cannot Manually Sync Slave Trades**: This is intentional. The Main Server is only connected to the Master terminal. Slave trades are written to the database automatically at the exact moment of execution by the `copier_slave.py` worker.
+- **Cannot Manually Sync Slave Trades**: This is intentional. The Main Server is only connected to the Master terminal. Slave trades are written to the database automatically at the exact moment of execution by the `copier_slave.py` worker via the async queue.
