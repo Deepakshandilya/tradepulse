@@ -105,10 +105,14 @@ def _update_close_in_db(app, slave_ticket: int):
                 log.warning(f"Trade {slave_ticket} not found in DB — cannot update close.")
                 return
 
+            import time
+            time.sleep(1.0)
+            
             # Try to get close price + profit from MT5 deal history
+            # Use a wider 1-day window to avoid UTC vs broker time mismatches
             history = mt5.history_deals_get(
-                datetime.now(timezone.utc) - timedelta(minutes=5),
-                datetime.now(timezone.utc) + timedelta(minutes=1),
+                datetime.now(timezone.utc) - timedelta(days=1),
+                datetime.now(timezone.utc) + timedelta(days=1),
             )
             close_deal = None
             if history:
@@ -182,54 +186,61 @@ def run_slave(terminal_path: str, master_account_id: int, volume_multiplier: flo
     pubsub.subscribe("trade_signals")
     log.info(f"Listening for signals from Master ID={master_account_id}  multiplier={volume_multiplier}x")
 
-    for message in pubsub.listen():
-        if message['type'] != 'message':
-            continue
-
-        data = json.loads(message['data'])
-
-        if data.get("master_account_id") != master_account_id:
-            continue
-
-        action = data.get("action")
-
-        # ── OPEN ────────────────────────────────────────────────────────────
-        if action == "OPEN":
-            master_ticket = data.get("ticket")
-            copy_volume   = round(data.get("volume", 0.0) * volume_multiplier, 2)
-            symbol        = data.get("symbol")
-            trade_type    = data.get("trade_type")
-
-            log.info(f">> OPEN  {trade_type:4s} {symbol:10s} vol={copy_volume} (master ticket={master_ticket})")
-
-            slave_ticket = svc.execute_trade(symbol=symbol, trade_type=trade_type, volume=copy_volume)
-
-            if slave_ticket:
-                master_to_slave[master_ticket] = slave_ticket
-                log.info(f"   Copied! master={master_ticket} -> slave={slave_ticket}")
-                if slave_account_id:
-                    _save_trade_to_db(flask_app, slave_account_id, slave_ticket, data, copy_volume)
-            else:
-                log.error(f"   Failed to copy trade (master ticket={master_ticket}).")
-
-        # ── CLOSE ───────────────────────────────────────────────────────────
-        elif action == "CLOSE":
-            master_ticket = data.get("ticket")
-            slave_ticket  = master_to_slave.get(master_ticket)
-
-            if slave_ticket is None:
-                log.warning(f"<< CLOSE master={master_ticket}: no slave mapping found (opened before this session?)")
+    try:
+        while True:
+            message = pubsub.get_message(timeout=1.0)
+            if not message:
+                continue
+                
+            if message['type'] != 'message':
                 continue
 
-            log.info(f"<< CLOSE {data.get('symbol'):10s} slave_ticket={slave_ticket}")
+            data = json.loads(message['data'])
 
-            success = svc.close_position(slave_ticket)
-            if success:
-                master_to_slave.pop(master_ticket, None)
-                if slave_account_id:
-                    _update_close_in_db(flask_app, slave_ticket)
-            else:
-                log.error(f"   Failed to close slave position {slave_ticket}.")
+            if data.get("master_account_id") != master_account_id:
+                continue
+
+            action = data.get("action")
+
+            # ── OPEN ────────────────────────────────────────────────────────────
+            if action == "OPEN":
+                master_ticket = data.get("ticket")
+                copy_volume   = round(data.get("volume", 0.0) * volume_multiplier, 2)
+                symbol        = data.get("symbol")
+                trade_type    = data.get("trade_type")
+
+                log.info(f">> OPEN  {trade_type:4s} {symbol:10s} vol={copy_volume} (master ticket={master_ticket})")
+
+                slave_ticket = svc.execute_trade(symbol=symbol, trade_type=trade_type, volume=copy_volume)
+
+                if slave_ticket:
+                    master_to_slave[master_ticket] = slave_ticket
+                    log.info(f"   Copied! master={master_ticket} -> slave={slave_ticket}")
+                    if slave_account_id:
+                        _save_trade_to_db(flask_app, slave_account_id, slave_ticket, data, copy_volume)
+                else:
+                    log.error(f"   Failed to copy trade (master ticket={master_ticket}).")
+
+            # ── CLOSE ───────────────────────────────────────────────────────────
+            elif action == "CLOSE":
+                master_ticket = data.get("ticket")
+                slave_ticket  = master_to_slave.get(master_ticket)
+
+                if slave_ticket is None:
+                    log.warning(f"<< CLOSE master={master_ticket}: no slave mapping found (opened before this session?)")
+                    continue
+
+                log.info(f"<< CLOSE {data.get('symbol'):10s} slave_ticket={slave_ticket}")
+
+                success = svc.close_position(slave_ticket)
+                if success:
+                    master_to_slave.pop(master_ticket, None)
+                    if slave_account_id:
+                        _update_close_in_db(flask_app, slave_ticket)
+                else:
+                    log.error(f"   Failed to close slave position {slave_ticket}.")
+    except KeyboardInterrupt:
+        log.info("Slave copier stopped by user.")
 
 
 if __name__ == "__main__":
