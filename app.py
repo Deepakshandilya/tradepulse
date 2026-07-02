@@ -60,9 +60,13 @@ SWAGGER_TEMPLATE = {
                 "properties": {
                     "id":           {"type": "integer", "example": 1},
                     "user_id":      {"type": "integer", "example": 1},
-                    "account_no":   {"type": "string",  "example": "5052406468"},
-                    "broker_name":  {"type": "string",  "example": "MetaQuotes-Demo"},
-                    "created_at":   {"type": "string",  "format": "date-time"},
+                    "account_no":        {"type": "string",  "example": "5052406468"},
+                    "broker_name":       {"type": "string",  "example": "MetaQuotes-Demo"},
+                    "role":              {"type": "string",  "example": "STANDALONE"},
+                    "master_account_id": {"type": "integer", "example": 1, "nullable": True},
+                    "volume_multiplier": {"type": "number",  "example": 1.0},
+                    "terminal_path":     {"type": "string",  "example": "C:\\Program Files\\MT5\\terminal64.exe", "nullable": True},
+                    "created_at":        {"type": "string",  "format": "date-time"},
                 },
             },
             "Trade": {

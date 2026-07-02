@@ -149,7 +149,7 @@ def get_user(user_id: int):
       404:
         description: User not found
     """
-    user = User.query.get(user_id)
+    user = db.session.get(User, user_id)
     if not user:
         return jsonify({"error": f"User {user_id} not found"}), 404
     return jsonify({"user": user.to_dict()}), 200
@@ -180,7 +180,7 @@ def delete_user(user_id: int):
         description: Internal server error
     """
     try:
-        user = User.query.get(user_id)
+        user = db.session.get(User, user_id)
         if not user:
             return jsonify({"error": f"User {user_id} not found"}), 404
         db.session.delete(user)

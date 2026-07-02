@@ -97,7 +97,7 @@ def add_account():
                 return jsonify({"error": "Fields 'login', 'password', 'server', and 'terminal_path' are required for MASTER/SLAVE roles."}), 400
 
         # Verify user exists
-        user = User.query.get(user_id)
+        user = db.session.get(User, user_id)
         if not user:
             return jsonify({"error": f"User {user_id} not found"}), 404
 
@@ -170,7 +170,7 @@ def list_accounts(user_id: int):
         description: Internal server error
     """
     try:
-        user = User.query.get(user_id)
+        user = db.session.get(User, user_id)
         if not user:
             return jsonify({"error": f"User {user_id} not found"}), 404
 
@@ -210,7 +210,7 @@ def delete_account(account_id: int):
         description: Internal server error
     """
     try:
-        account = BrokerAccount.query.get(account_id)
+        account = db.session.get(BrokerAccount, account_id)
         if not account:
             return jsonify({"error": f"Account {account_id} not found"}), 404
         db.session.delete(account)

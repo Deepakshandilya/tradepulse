@@ -14,7 +14,7 @@ def update_account(account_id: int, login: int, password: str, server: str):
     app = create_app(start_workers=False)
     with app.app_context():
         from models.broker_account import BrokerAccount
-        account = BrokerAccount.query.get(account_id)
+        account = db.session.get(BrokerAccount, account_id)
         if not account:
             print(f"Error: Account with ID {account_id} not found.")
             return

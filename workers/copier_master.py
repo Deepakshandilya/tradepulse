@@ -15,7 +15,7 @@ import json
 import logging
 import redis
 from config import Config
-from app import create_app
+from app import create_app, db
 from utils.encryption import decrypt_password
 
 # ── Colored Logging ────────────────────────────────────────────────────────────
@@ -69,7 +69,7 @@ def run_master(terminal_path: str, master_account_id: int):
     with flask_app.app_context():
         from models.broker_account import BrokerAccount
         # Use session.get() instead of query.get() to avoid legacy warnings if preferred, or just stick to query.get
-        master_account = BrokerAccount.query.get(master_account_id)
+        master_account = db.session.get(BrokerAccount, master_account_id)
         if not master_account:
             log.error(f"Master account {master_account_id} not found in DB.")
             return

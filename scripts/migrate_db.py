@@ -50,7 +50,7 @@ def migrate_env_credentials():
         from models.broker_account import BrokerAccount
         
         # Populate Master account (Assume ID = 1 based on .env comments)
-        master = BrokerAccount.query.get(1)
+        master = db.session.get(BrokerAccount, 1)
         if master:
             master.login = Config.MT5_LOGIN
             master.password_encrypted = encrypt_password(Config.MT5_PASSWORD)
@@ -62,7 +62,7 @@ def migrate_env_credentials():
             
         # The .env file has comments for account ID 3 (Slave)
         # MT5_LOGIN=109043772, MT5_PASSWORD=-a5zDuAl, MT5_SERVER=MetaQuotes-Demo
-        slave = BrokerAccount.query.get(3)
+        slave = db.session.get(BrokerAccount, 3)
         if slave:
             slave.login = 109043772
             slave.password_encrypted = encrypt_password("-a5zDuAl")

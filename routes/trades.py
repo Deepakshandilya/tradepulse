@@ -66,7 +66,7 @@ def sync_trades(account_id: int):
       500:
         description: Internal server error or MT5 connection failure
     """
-    account = BrokerAccount.query.get(account_id)
+    account = db.session.get(BrokerAccount, account_id)
     if not account:
         return jsonify({"error": f"Account {account_id} not found"}), 404
 
@@ -246,7 +246,7 @@ def list_trades(account_id: int):
         description: Internal server error
     """
     try:
-        account = BrokerAccount.query.get(account_id)
+        account = db.session.get(BrokerAccount, account_id)
         if not account:
             return jsonify({"error": f"Account {account_id} not found"}), 404
 
