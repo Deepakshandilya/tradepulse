@@ -52,11 +52,12 @@ class MT5Service:
     # ── Singleton connection state (class-level, shared across all instances) ─
     _initialized: bool = False
 
-    def __init__(self) -> None:
+    def __init__(self, path: str = None, login: int = None, password: str = None, server: str = None) -> None:
         from config import Config
-        self._login    = Config.MT5_LOGIN
-        self._password = Config.MT5_PASSWORD
-        self._server   = Config.MT5_SERVER
+        self._path     = path
+        self._login    = login if login is not None else Config.MT5_LOGIN
+        self._password = password if password is not None else Config.MT5_PASSWORD
+        self._server   = server if server is not None else Config.MT5_SERVER
 
     # ── Connection ─────────────────────────────────────────────────────────
 
@@ -73,11 +74,15 @@ class MT5Service:
             log.debug("MT5 already connected — skipping re-initialize.")
             return
 
-        ok = mt5.initialize(
-            login=self._login,
-            password=self._password,
-            server=self._server,
-        )
+        kwargs = {
+            "login": self._login,
+            "password": self._password,
+            "server": self._server,
+        }
+        if self._path:
+            kwargs["path"] = self._path
+            
+        ok = mt5.initialize(**kwargs)
         if not ok:
             error = mt5.last_error()
             raise ConnectionError(f"MT5 initialisation failed: {error}")

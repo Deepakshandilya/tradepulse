@@ -15,6 +15,8 @@ import json
 import logging
 import redis
 from config import Config
+from app import create_app
+from utils.encryption import decrypt_password
 
 # ── Colored Logging ────────────────────────────────────────────────────────────
 class CopierFormatter(logging.Formatter):
@@ -61,14 +63,42 @@ def run_master(terminal_path: str, master_account_id: int):
         log.error("MT5 package not available. Exiting.")
         return
 
-    log.info(f"Connecting to Master Terminal: {terminal_path}")
-    if not mt5.initialize(path=terminal_path):
+    # Initialize Flask app to access DB
+    flask_app = create_app(start_workers=False)
+    
+    with flask_app.app_context():
+        from models.broker_account import BrokerAccount
+        # Use session.get() instead of query.get() to avoid legacy warnings if preferred, or just stick to query.get
+        master_account = BrokerAccount.query.get(master_account_id)
+        if not master_account:
+            log.error(f"Master account {master_account_id} not found in DB.")
+            return
+            
+        login = master_account.login
+        password = decrypt_password(master_account.password_encrypted)
+        server = master_account.server
+
+    if not login or not password or not server:
+        log.error("Master account is missing explicit credentials (login, password, server).")
+        return
+
+    log.info(f"Connecting to Master Terminal: {terminal_path} for account {login}")
+    if not mt5.initialize(
+        path=terminal_path,
+        login=login,
+        password=password,
+        server=server,
+        timeout=10000
+    ):
         log.error(f"initialize() failed: {mt5.last_error()}")
         return
 
     info = mt5.account_info()
-    if info:
-        log.info(f"Connected to Master account: {info.login} on {info.server}")
+    if info is None or info.login != login:
+        log.error(f"Wrong account logged in! Expected {login}, got {info.login if info else None}")
+        return
+
+    log.info(f"Connected to Master account: {info.login} on {info.server}")
 
     try:
         r = redis.from_url(Config.REDIS_URL)
@@ -113,7 +143,8 @@ def run_master(terminal_path: str, master_account_id: int):
                         "volume":            p.volume,
                         "price_open":        p.price_open,
                     }
-                    r.publish("trade_signals", json.dumps(msg))
+                    # Redis Streams XADD
+                    r.xadd("trade_stream", {"action": msg["action"], "payload": json.dumps(msg)})
                     log.info(f">> OPEN  {trade_type:4s} {p.symbol:10s} vol={p.volume} ticket={ticket}")
 
             # ── Detect CLOSED positions (CLOSE signal) ──────────────────────
@@ -126,7 +157,8 @@ def run_master(terminal_path: str, master_account_id: int):
                     "ticket":            ticket,
                     "symbol":            p.symbol,
                 }
-                r.publish("trade_signals", json.dumps(msg))
+                # Redis Streams XADD
+                r.xadd("trade_stream", {"action": msg["action"], "payload": json.dumps(msg)})
                 log.info(f"<< CLOSE {p.symbol:10s} ticket={ticket}")
 
             known_positions = current_positions

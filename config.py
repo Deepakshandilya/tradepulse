@@ -33,3 +33,6 @@ class Config:
 
     # ── Commission ─────────────────────────────────────────────────────────
     COMMISSION_PER_LOT: float = 5.0         # USD charged per lot traded
+
+    # ── Encryption ─────────────────────────────────────────────────────────
+    CREDENTIAL_ENCRYPTION_KEY: str = os.getenv("CREDENTIAL_ENCRYPTION_KEY", "")

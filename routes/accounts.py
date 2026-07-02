@@ -10,6 +10,7 @@ from flask import Blueprint, request, jsonify
 from app import db
 from models.user import User
 from models.broker_account import BrokerAccount
+from utils.encryption import encrypt_password
 
 accounts_bp = Blueprint("accounts", __name__)
 
@@ -70,6 +71,17 @@ def add_account():
         user_id     = data.get("user_id")
         account_no  = str(data.get("account_no", "")).strip()
         broker_name = str(data.get("broker_name", "")).strip()
+        
+        # New trade copier fields
+        role = str(data.get("role", "STANDALONE")).strip().upper()
+        master_account_id = data.get("master_account_id")
+        volume_multiplier = float(data.get("volume_multiplier", 1.0))
+        
+        # New explicit MT5 credentials
+        login_val = data.get("login")
+        password_val = data.get("password")
+        server_val = data.get("server")
+        terminal_path_val = data.get("terminal_path")
 
         if not user_id:
             return jsonify({"error": "Field 'user_id' is required"}), 400
@@ -77,6 +89,12 @@ def add_account():
             return jsonify({"error": "Field 'account_no' is required"}), 400
         if not broker_name:
             return jsonify({"error": "Field 'broker_name' is required"}), 400
+            
+        # Optional validation depending on if we strictly require them for all accounts now
+        # If terminal_path is required by DB, we must enforce it here
+        if role in ["MASTER", "SLAVE"]:
+            if not login_val or not password_val or not server_val or not terminal_path_val:
+                return jsonify({"error": "Fields 'login', 'password', 'server', and 'terminal_path' are required for MASTER/SLAVE roles."}), 400
 
         # Verify user exists
         user = User.query.get(user_id)
@@ -96,6 +114,13 @@ def add_account():
             user_id=user_id,
             account_no=account_no,
             broker_name=broker_name,
+            role=role,
+            master_account_id=master_account_id,
+            volume_multiplier=volume_multiplier,
+            login=login_val,
+            password_encrypted=encrypt_password(password_val) if password_val else None,
+            server=server_val,
+            terminal_path=terminal_path_val
         )
         db.session.add(account)
         db.session.commit()

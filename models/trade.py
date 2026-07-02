@@ -12,6 +12,9 @@ class Trade(db.Model):
 
     # MT5 unique identifier — used for deduplication
     ticket      = db.Column(db.BigInteger, unique=True, nullable=False, index=True)
+    
+    # Trade Copier Link
+    master_ticket_id = db.Column(db.BigInteger, index=True, nullable=True)
 
     symbol      = db.Column(db.String(20),  nullable=False)   # e.g. EURUSD
     trade_type  = db.Column(db.String(10),  nullable=False)   # BUY / SELL
@@ -21,6 +24,8 @@ class Trade(db.Model):
     profit      = db.Column(db.Float,       default=0.0)
     open_time   = db.Column(db.DateTime,    nullable=False)
     close_time  = db.Column(db.DateTime,    nullable=True)
+    
+    status      = db.Column(db.String(20),  default="OPEN") # PENDING, OPEN, CLOSED, ERROR
 
     # One-to-one back-reference from Commission
     commission  = db.relationship(

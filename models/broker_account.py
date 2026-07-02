@@ -22,7 +22,13 @@ class BrokerAccount(db.Model):
     role              = db.Column(db.String(20), default="STANDALONE")  # MASTER, SLAVE, STANDALONE
     master_account_id = db.Column(db.Integer, db.ForeignKey("broker_accounts.id"), nullable=True)
     volume_multiplier = db.Column(db.Float, default=1.0)
-    terminal_path     = db.Column(db.String(255), nullable=True)
+    
+    # MT5 Terminal Credentials & Connection
+    login              = db.Column(db.BigInteger, nullable=True) # Making nullable=True initially for migration safety
+    password_encrypted = db.Column(db.LargeBinary, nullable=True)
+    server             = db.Column(db.String(100), nullable=True)
+    terminal_path      = db.Column(db.String(255), nullable=True, unique=True)
+
 
     # Relationship: an account has many trades
     trades = db.relationship(

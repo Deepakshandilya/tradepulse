@@ -97,6 +97,7 @@ def sync_all_accounts(app, socketio) -> None:
                             existing.close_price = deal.price
                             existing.close_time  = mt5.ts_to_datetime(deal.time)
                             existing.profit      = deal.profit
+                            existing.status      = "CLOSED"
                             db.session.flush()
                             skipped += 1
                         else:
@@ -114,6 +115,7 @@ def sync_all_accounts(app, socketio) -> None:
                                 profit      = deal.profit,
                                 open_time   = None,
                                 close_time  = mt5.ts_to_datetime(deal.time),
+                                status      = "CLOSED"
                             )
                             db.session.add(trade)
                             db.session.flush()
