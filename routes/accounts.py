@@ -44,6 +44,27 @@ def add_account():
               broker_name:
                 type: string
                 example: MetaQuotes-Demo
+              role:
+                type: string
+                example: "MASTER"
+              master_account_id:
+                type: integer
+                example: 1
+              volume_multiplier:
+                type: number
+                example: 1.0
+              login:
+                type: string
+                example: "5052406468"
+              password:
+                type: string
+                example: "password123"
+              server:
+                type: string
+                example: "MetaQuotes-Demo"
+              terminal_path:
+                type: string
+                example: "C:/Program Files/MT5/terminal64.exe"
     responses:
       201:
         description: Account added successfully
